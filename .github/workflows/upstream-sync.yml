@@ -1,0 +1,97 @@
+# Scheduled upstream sync for the stockh0lm fork.
+#
+# Keeps fork main tracking ZaxbyHub/opencode-swarm main without manual
+# long-lived-branch rebases:
+#   - clean merge + green build  -> push to main directly
+#   - merge conflict             -> open an issue naming the conflicted files
+#   - merge ok, build broken     -> open an issue, do NOT push
+#
+# NOTE: GitHub disables scheduled workflows on forks by default. Enable
+# Actions for this fork once (Actions tab -> enable), or trigger manually
+# via workflow_dispatch.
+name: upstream-sync
+
+on:
+  schedule:
+    # Mondays 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Attempt upstream merge
+        id: merge
+        run: |
+          set -euo pipefail
+          git config user.name "upstream-sync[bot]"
+          git config user.email "actions@users.noreply.github.com"
+          git remote add upstream https://github.com/ZaxbyHub/opencode-swarm.git
+          git fetch upstream main
+          if git merge upstream/main --no-edit; then
+            echo "result=merged" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U > /tmp/conflicts.txt || true
+            git merge --abort
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build check (merged tree)
+        id: build
+        if: steps.merge.outputs.result == 'merged'
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Push main
+        if: steps.merge.outputs.result == 'merged' && steps.build.outcome == 'success'
+        run: git push origin main
+
+      - name: Report failure (conflict or broken build)
+        if: steps.merge.outputs.result == 'conflict' || steps.build.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.merge.outputs.result }}" = "conflict" ]; then
+            reason="merge conflict"
+          else
+            reason="build failure on the merged tree"
+          fi
+          title="Upstream sync failed: ${reason}"
+          if gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title Upstream sync failed" | grep -q .; then
+            echo "An open upstream-sync failure issue already exists — not filing a duplicate."
+            exit 0
+          fi
+          {
+            echo "The scheduled upstream sync could not update \`main\` from ZaxbyHub/opencode-swarm: **${reason}**."
+            echo
+            if [ -s /tmp/conflicts.txt ]; then
+              echo "Conflicted files:"
+              sed 's/^/- `/; s/$/`/' /tmp/conflicts.txt
+              echo
+            fi
+            echo "Resolve manually:"
+            echo '```'
+            echo "git fetch upstream main"
+            echo "git merge upstream/main"
+            echo '# fix conflicts, run: bun install && bun run build && bun test <changed tests>'
+            echo '```'
+          } > /tmp/issue-body.md
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file /tmp/issue-body.md
