@@ -1441,10 +1441,54 @@ function releaseReservationLeaseIfPresent(
 	}
 }
 
+/**
+ * Result of reading the delegation coordination namespace: the parsed
+ * records (null = the authoritative state is uncertain — callers must fail
+ * closed) plus, in lenient mode, the bounded list of coordination rows whose
+ * payload failed RecordSchema validation and was skipped.
+ */
+interface CoordinationRowsRead {
+	records: BackgroundDelegationRecord[] | null;
+	skippedEntityKeys: string[];
+}
+
+/**
+ * Lenient coordination reads skip at most this many schema-invalid rows. A
+ * wider drift (a systematic writer/reader vocabulary regression poisoning
+ * many rows at once) must stay visible as uncertainty instead of silently
+ * hiding most of the namespace.
+ */
+const MAX_COORDINATION_SCHEMA_SKIP_ROWS = 8;
+
+function recordCoordinationSkip(
+	directory: string,
+	skippedEntityKeys: string[],
+): void {
+	try {
+		writeDelegationHealthArtifact(directory, {
+			lastCoordinationSkip: {
+				reason:
+					'delegation coordination row failed schema validation (skipped by lenient read; writes and destructive cleanup stay fail-closed)',
+				at: Date.now(),
+				source: 'coordination-read-lenient',
+				skippedEntityKeys: skippedEntityKeys.slice(0, 64),
+				skippedCount: skippedEntityKeys.length,
+			},
+		});
+	} catch {
+		// The observation sink must never break the store.
+	}
+}
+
 function coordinationRowsToDelegations(
 	directory: string,
-): BackgroundDelegationRecord[] | null {
-	if (!projectDbExists(directory)) return null;
+	options?: { lenientSchemaSkips?: boolean },
+): CoordinationRowsRead {
+	if (!projectDbExists(directory)) {
+		return { records: null, skippedEntityKeys: [] };
+	}
+	const lenient = options?.lenientSchemaSkips === true;
+	const skippedEntityKeys: string[] = [];
 	try {
 		const rows = listCoordinationStates(
 			directory,
@@ -1456,7 +1500,7 @@ function coordinationRowsToDelegations(
 				`delegation coordination read reached its ${MAX_COORDINATION_STATE_LIST_ROWS}-row safety bound`,
 			);
 		}
-		return rows
+		const records = rows
 			.map((row) => {
 				const parsed = RecordSchema.safeParse(
 					JSON.parse(row.payload) as unknown,
@@ -1467,6 +1511,21 @@ function coordinationRowsToDelegations(
 				// payload identity), and the conflated message hid which one
 				// fired.
 				if (!parsed.success) {
+					// Lenient reads (advisory/status) skip a bounded number of
+					// schema-drifted rows instead of failing the whole
+					// namespace as uncertain — one drifted row (a writer from
+					// a newer plugin release whose vocabulary the current
+					// reader lacks) must not poison every count and status
+					// view. The skip is durably visible via the health
+					// artifact; write and destructive-cleanup paths keep
+					// reading strictly and refuse while any row is drifted.
+					if (lenient && skippedEntityKeys.length < MAX_COORDINATION_SCHEMA_SKIP_ROWS) {
+						skippedEntityKeys.push(row.entityKey);
+						logger.warn(
+							`[background] coordination row ${row.entityKey} failed schema validation; skipped by lenient read (${skippedEntityKeys.length}/${MAX_COORDINATION_SCHEMA_SKIP_ROWS})`,
+						);
+						return null;
+					}
 					throw new Error(
 						`delegation coordination row failed schema validation for ${row.entityKey}`,
 					);
@@ -1488,18 +1547,23 @@ function coordinationRowsToDelegations(
 				}
 				return parsed.data as BackgroundDelegationRecord;
 			})
+			.filter((record): record is BackgroundDelegationRecord => record !== null)
 			.sort((left, right) =>
 				left.createdAt === right.createdAt
 					? left.correlationId.localeCompare(right.correlationId)
 					: left.createdAt - right.createdAt,
 			);
+		if (lenient && skippedEntityKeys.length > 0) {
+			recordCoordinationSkip(directory, skippedEntityKeys);
+		}
+		return { records, skippedEntityKeys };
 	} catch (error) {
 		recordLedgerUncertainty(
 			directory,
 			error instanceof Error ? error.message : String(error),
 			'coordination-read',
 		);
-		return null;
+		return { records: null, skippedEntityKeys: [] };
 	}
 }
 
@@ -1585,12 +1649,24 @@ type DelegationCoordinationImportState = 'ready' | 'absent' | 'uncertain';
 function ensureDelegationCoordinationImported(
 	directory: string,
 	createIfNeeded: boolean,
+	readOptions?: { lenientSchemaSkips?: boolean },
 ): DelegationCoordinationImportState {
 	const dbExists = projectDbExists(directory);
 	if (!createIfNeeded && !dbExists) return 'absent';
-	const existing = dbExists ? coordinationRowsToDelegations(directory) : null;
-	if (dbExists && existing === null) return 'uncertain';
-	if (existing && existing.length > 0) {
+	const existing = dbExists
+		? coordinationRowsToDelegations(directory, readOptions)
+		: null;
+	const existingRecords = existing?.records ?? null;
+	if (dbExists && existingRecords === null) return 'uncertain';
+	// Lenient read where every row drifted (or the namespace is empty): with
+	// skipped rows present the legacy import must NOT run — it would try to
+	// re-import the legacy ledger over drifted-but-authoritative rows. This
+	// also keeps the shadow projection untouched (it must never be rewritten
+	// from partial truth).
+	if (readOptions?.lenientSchemaSkips === true && existing?.skippedEntityKeys.length) {
+		return 'ready';
+	}
+	if (existingRecords && existingRecords.length > 0) {
 		// Mutation callers already hold the store lock and rewrite the compatibility
 		// projection after a successful transition when it is absent. Avoid folding
 		// the entire ledger on every append; ordinary readers retain the full shadow
@@ -1600,7 +1676,7 @@ function ensureDelegationCoordinationImported(
 			projectionMarkerPath(storePath(directory)),
 		);
 		const shadowMatches =
-			markerPresent && delegationShadowMatches(directory, existing);
+			markerPresent && delegationShadowMatches(directory, existingRecords);
 		if (!shadowMatches) {
 			for (const filePath of [
 				storePath(directory),
@@ -1609,7 +1685,7 @@ function ensureDelegationCoordinationImported(
 			]) {
 				archiveShadowFileBestEffort(filePath);
 			}
-			writeDelegationShadowProjection(directory, existing);
+			writeDelegationShadowProjection(directory, existingRecords);
 		}
 		return 'ready';
 	}
@@ -2372,8 +2448,10 @@ function loadRecordsForWrite(
 	const importState = ensureDelegationCoordinationImported(directory, true);
 	if (importState === 'uncertain') return null;
 	if (importState === 'ready') {
+		// Strict by design: a mutation path refuses on ANY drifted row rather
+		// than append state derived from partial truth.
 		const coordination = coordinationRowsToDelegations(directory);
-		if (coordination !== null) return coordination;
+		if (coordination.records !== null) return coordination.records;
 		return null;
 	}
 	const load = loadFoldedState(directory, { strict: false });
@@ -2876,7 +2954,7 @@ function compactDelegationsLocked(
 ): CompactBackgroundDelegationsResult {
 	const hasAuthority = projectDbExists(directory);
 	const authoritative = hasAuthority
-		? coordinationRowsToDelegations(directory)
+		? coordinationRowsToDelegations(directory).records
 		: null;
 	const manifestRead = hasAuthority ? readDelegationManifest(directory) : null;
 	const checkpointRead = hasAuthority
@@ -3260,6 +3338,13 @@ export type DelegationReadOutcome =
 				| 'legacy-ledger'
 				| 'checkpoint+tail'
 				| 'checkpoint+ledger-suffix';
+			/**
+			 * Coordination rows whose payload failed schema validation and was
+			 * skipped by the lenient advisory read (bounded). Present only when
+			 * the read is partial: writes and destructive cleanup stay
+			 * fail-closed on these rows until the drift is repaired.
+			 */
+			skippedCoordinationRows?: string[];
 	  }
 	| {
 			status: 'uncertain';
@@ -3275,7 +3360,15 @@ export type DelegationReadOutcome =
 const DELEGATION_READ_REASON_MAX_CHARS = 200;
 
 function readDelegationLoadAttempt(directory: string): DelegationReadOutcome {
-	const importState = ensureDelegationCoordinationImported(directory, false);
+	// The ordinary advisory read is LENIENT towards schema-drifted
+	// coordination rows: one drifted row (a writer from a newer plugin release
+	// whose vocabulary the current reader lacks) must not make every status
+	// and count view report global uncertainty. Skipped rows are surfaced on
+	// the ok outcome and durably via the health artifact; write and
+	// destructive-cleanup paths keep their strict reads.
+	const importState = ensureDelegationCoordinationImported(directory, false, {
+		lenientSchemaSkips: true,
+	});
 	if (importState === 'uncertain') {
 		return {
 			status: 'uncertain',
@@ -3285,9 +3378,18 @@ function readDelegationLoadAttempt(directory: string): DelegationReadOutcome {
 		};
 	}
 	if (importState === 'ready') {
-		const coordination = coordinationRowsToDelegations(directory);
-		if (coordination !== null) {
-			return { status: 'ok', records: coordination, source: 'coordination' };
+		const coordination = coordinationRowsToDelegations(directory, {
+			lenientSchemaSkips: true,
+		});
+		if (coordination.records !== null) {
+			return {
+				status: 'ok',
+				records: coordination.records,
+				source: 'coordination',
+				...(coordination.skippedEntityKeys.length > 0
+					? { skippedCoordinationRows: coordination.skippedEntityKeys }
+					: {}),
+			};
 		}
 		// A ready SQLite authority that cannot be read (including the bounded
 		// pagination ceiling) is uncertainty, never a fall back to a possibly
@@ -3468,10 +3570,10 @@ export function scanDelegationsForRecovery(
 	}
 	if (importState === 'ready') {
 		const coordination = coordinationRowsToDelegations(directory);
-		if (coordination !== null) {
+		if (coordination.records !== null) {
 			return {
 				status: 'ok',
-				owners: coordination,
+				owners: coordination.records,
 				source: 'checkpoint+tail',
 			};
 		}
@@ -3588,7 +3690,7 @@ function appendRecord(
 			);
 		}
 		if (!fs.existsSync(projectionMarkerPath(storePath(directory)))) {
-			const records = coordinationRowsToDelegations(directory);
+			const records = coordinationRowsToDelegations(directory).records;
 			if (records) writeDelegationShadowProjection(directory, records);
 		}
 		return;
