@@ -1,4 +1,9 @@
 import * as fs from 'node:fs';
+import { loadPluginConfig } from '../config/loader.js';
+import {
+	DEFAULT_BACKGROUND_PENDING_TIMEOUT_MINUTES,
+	type HooksConfig,
+} from '../config/schema.js';
 import { coreEventsFilePath } from '../events/core-events.js';
 import { readTaskEvidenceRaw } from '../gate-evidence.js';
 import { sanitizeDiagnosticText } from '../scope/path-identity.js';
@@ -93,7 +98,13 @@ function renderOutcome(outcome: StaleSettlementRecoveryOutcome): string {
 				outcome.accepted
 					? 'changes attributed'
 					: 'no workspace change to attribute'
-			}${outcome.forced ? ', in-process ownership released by --force' : ''})`;
+			}${
+				outcome.forced
+					? outcome.releaseReason === 'ownership-expired'
+						? ', in-process ownership auto-released (registration older than the background pending timeout + grace)'
+						: ', in-process ownership released by --force'
+					: ''
+			})`;
 		case 'already_terminal':
 			return `⏭️ Task ${outcome.taskId}: settlement already ${outcome.state} (nothing to recover)`;
 		case 'owned_in_process':
@@ -168,6 +179,27 @@ function renderStageARepairOutcome(outcome: StageARepairOutcome): string {
  * Human-only by policy: agents already self-heal dead-owner settlements via
  * update_task_status, and --force must stay an operator decision.
  */
+/**
+ * The consumer's `hooks.background_pending_timeout_minutes`, anchoring the
+ * ownership expiry in recoverStaleCoderSettlements (a leaked in-process
+ * registration whose non-terminal WAL is older than timeout + grace is
+ * auto-released instead of demanding --force). Read defensively: any
+ * config-load failure or malformed value falls back to the schema default —
+ * recovery must never wedge behind its own config read.
+ */
+function readBackgroundPendingTimeoutMinutes(directory: string): number {
+	try {
+		const hooks = (loadPluginConfig(directory) as { hooks?: HooksConfig })
+			.hooks;
+		const value = hooks?.background_pending_timeout_minutes;
+		return typeof value === 'number' && Number.isFinite(value) && value >= 1
+			? value
+			: DEFAULT_BACKGROUND_PENDING_TIMEOUT_MINUTES;
+	} catch {
+		return DEFAULT_BACKGROUND_PENDING_TIMEOUT_MINUTES;
+	}
+}
+
 export async function handleRecoverCommand(
 	directory: string,
 	args: string[],
@@ -326,6 +358,7 @@ export async function handleRecoverCommand(
 			await recoverStaleCoderSettlements(directory, {
 				...(taskId ? { taskIds: [taskId] } : {}),
 				force,
+				pendingTimeoutMinutes: readBackgroundPendingTimeoutMinutes(directory),
 			});
 
 		const lines = results.map((outcome) => renderOutcome(outcome));

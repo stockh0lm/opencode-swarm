@@ -311,6 +311,21 @@ export const PricingConfigSchema = z.object({
 export type PricingConfig = z.infer<typeof PricingConfigSchema>;
 
 // Hook feature flags
+/**
+ * Default for `hooks.background_pending_timeout_minutes` (schema default AND
+ * the runtime fallbacks that read it without a parsed config): one hour.
+ * Legitimately long coder legs — large refactors whose serial verification
+ * runs are task-mandated — have exceeded the historical 30 minutes and were
+ * timeout-aborted mid-delivery, orphaning real, committed mutations behind a
+ * stale background completion (2026-11-24 swarm_communication_debug, task
+ * 2.20: ~35-minute leg aborted at 30). The bound also anchors the
+ * coder-settlement ownership expiry: `/swarm recover` auto-releases an
+ * in-process dispatch registration whose non-terminal WAL is older than this
+ * timeout plus a grace, instead of demanding `--force` for a leaked
+ * registration (see `coderDispatchOwnershipIsStale`).
+ */
+export const DEFAULT_BACKGROUND_PENDING_TIMEOUT_MINUTES = 60;
+
 export const HooksConfigSchema = z.object({
 	system_enhancer: z.boolean().default(true),
 	compaction: z.boolean().default(true),
@@ -332,13 +347,16 @@ export const HooksConfigSchema = z.object({
 	 */
 	background_subagents: z.boolean().default(false),
 	/** Bounded lifetime (minutes) after which a tracked pending background delegation is
-	 *  swept to `stale` so `.swarm/` does not accumulate permanently-running entries. */
+	 *  swept to `stale` so `.swarm/` does not accumulate permanently-running entries.
+	 *  Default: {@link DEFAULT_BACKGROUND_PENDING_TIMEOUT_MINUTES} — long enough for
+	 *  task-mandated serial-verification coder legs (the 2026-11-24 30-minute abort
+	 *  orphaned a real, committed delivery); lower it for short-lived delegations. */
 	background_pending_timeout_minutes: z
 		.number()
 		.int()
 		.min(1)
 		.max(1440)
-		.default(30),
+		.default(DEFAULT_BACKGROUND_PENDING_TIMEOUT_MINUTES),
 	/**
 	 * Auto-inject default ACCEPTANCE: block into coder and reviewer dispatches lacking one.
 	 * When true, dispatches without explicit ACCEPTANCE criteria automatically receive

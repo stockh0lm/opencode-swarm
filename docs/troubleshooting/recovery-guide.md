@@ -115,7 +115,9 @@ Setting `hooks.background_subagents: true` lifts the block: background swarm dis
 **allowed and tracked** as durable pending records in `.swarm/background-delegations.jsonl`,
 and the observer ingests trusted `synthetic` task envelopes into that advisory ledger when
 they correlate to a real dispatch. Unresolved pendings are transitioned to `stale` after
-`hooks.background_pending_timeout_minutes` (default 30); the on-disk log is append-only.
+`hooks.background_pending_timeout_minutes` (default 60 — long enough for task-mandated
+serial-verification coder legs; the same bound plus a grace anchors the `/swarm recover`
+ownership expiry for leaked in-process dispatch registrations); the on-disk log is append-only.
 
 For Stage B reviewer/test_engineer background delegations, the completion is no
 longer advisory-only after PR2: it must correlate to a pending record, match the

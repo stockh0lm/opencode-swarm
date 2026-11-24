@@ -10,6 +10,7 @@ import {
 	captureWorkspaceSnapshotAsync,
 	changedFilesSinceSnapshotAsync,
 } from '../background/workspace-snapshot.js';
+import { DEFAULT_BACKGROUND_PENDING_TIMEOUT_MINUTES } from '../config/schema.js';
 import { appendCoreEventSync } from '../events/core-events.js';
 import {
 	ensureTaskGateRequirementsReceiptForSettledTransition,
@@ -63,6 +64,53 @@ if (!globalRegistry[LIVE_DISPATCHES_SYMBOL]) {
 const liveDispatches = globalRegistry[LIVE_DISPATCHES_SYMBOL];
 const runtimeId = randomUUID();
 const MAX_LIVE_DISPATCHES = 512;
+
+/**
+ * Grace beyond the configured background pending timeout before a
+ * non-terminal coder-settlement WAL's in-process ownership is considered
+ * void for recovery. The dispatching host process's own timeout path
+ * (abort-to-durable-background-completion) has settled or aborted the
+ * dispatch long before this bound, so a DISPATCHED/PREPARED WAL older than
+ * timeout + grace with a live in-process registration is a LEAKED
+ * registration, not a running dispatch.
+ */
+const OWNERSHIP_EXPIRY_GRACE_MINUTES = 10;
+
+/**
+ * Whether a coder-settlement WAL's ownership is stale by AGE alone (the
+ * 2026-11-24 swarm_communication_debug restart-aftermath wedge). The
+ * in-process `liveDispatches` registry and the WAL's `processId` liveness
+ * probe have no expiry: a registration whose drain path (settle, abort, or
+ * the pending-timeout transfer) never ran — after session close, a host
+ * restart, or a lost background completion — blocks `/swarm recover`
+ * indefinitely and demands `--force` for a dispatch that cannot still be
+ * legitimately in flight. A non-terminal WAL whose dispatch timestamp
+ * (`recordedAt`, preserved through every WAL rewrite) is older than the
+ * maximal legitimate pending lifetime — the configured
+ * `hooks.background_pending_timeout_minutes` plus
+ * {@link OWNERSHIP_EXPIRY_GRACE_MINUTES} — is past every path that could
+ * still settle it.
+ *
+ * Fail closed: a missing or unparsable `recordedAt` never expires, and
+ * terminal states (ABORTED/COMMITTED) are not ownership questions at all.
+ */
+export function coderDispatchOwnershipIsStale(
+	input: {
+		state: CoderSettlementWal['state'] | 'unreadable';
+		recordedAt?: string;
+	},
+	pendingTimeoutMinutes: number,
+	nowMs: number = Date.now(),
+): boolean {
+	if (input.state !== 'DISPATCHED' && input.state !== 'PREPARED') return false;
+	if (typeof input.recordedAt !== 'string' || input.recordedAt.length === 0)
+		return false;
+	const recordedMs = Date.parse(input.recordedAt);
+	if (!Number.isFinite(recordedMs)) return false;
+	const boundMs =
+		(pendingTimeoutMinutes + OWNERSHIP_EXPIRY_GRACE_MINUTES) * 60_000;
+	return nowMs - recordedMs > boundMs;
+}
 
 function dispatchKey(
 	directory: string,
@@ -1698,7 +1746,20 @@ export async function listCoderSettlementWalStates(
 }
 
 export type StaleSettlementRecoveryOutcome =
-	| { taskId: string; outcome: 'recovered'; accepted: boolean; forced: boolean }
+	| {
+			taskId: string;
+			outcome: 'recovered';
+			accepted: boolean;
+			forced: boolean;
+			/**
+			 * Why an in-process ownership release was necessary: the operator's
+			 * `--force` assertion, or the age-based auto-expiry of a leaked
+			 * registration (2026-11-24 swarm_communication_debug — a non-terminal
+			 * WAL older than the background pending timeout + grace cannot still
+			 * be legitimately in flight). Absent when no release happened.
+			 */
+			releaseReason?: 'force' | 'ownership-expired';
+	  }
 	| {
 			taskId: string;
 			outcome: 'already_terminal';
@@ -1729,14 +1790,32 @@ export type StaleSettlementRecoveryOutcome =
  * in flight, its late completion will fail settlement with
  * CODER_SETTLEMENT_IDEMPOTENCY_CONFLICT against the already-recovered WAL.
  * A foreign live pid is NEVER forced — its dispatch lives in another process.
+ * The ONE automatic release is age-based (2026-11-24
+ * swarm_communication_debug): an in-process registration whose non-terminal
+ * WAL is older than `pendingTimeoutMinutes` + grace is a leaked registration
+ * (every settle/abort path has had ample time) and is released without
+ * `--force`, with `releaseReason: 'ownership-expired'` on the outcome and
+ * event for the audit trail.
  */
 export async function recoverStaleCoderSettlements(
 	directory: string,
-	options?: { taskIds?: string[]; force?: boolean },
+	options?: {
+		taskIds?: string[];
+		force?: boolean;
+		/**
+		 * The consumer's `hooks.background_pending_timeout_minutes`, anchoring
+		 * the ownership expiry (see {@link coderDispatchOwnershipIsStale}).
+		 * Defaults to {@link DEFAULT_BACKGROUND_PENDING_TIMEOUT_MINUTES}.
+		 */
+		pendingTimeoutMinutes?: number;
+	},
 ): Promise<{
 	results: StaleSettlementRecoveryOutcome[];
 	truncated: boolean;
 }> {
+	const pendingTimeoutMinutes =
+		options?.pendingTimeoutMinutes ??
+		DEFAULT_BACKGROUND_PENDING_TIMEOUT_MINUTES;
 	const { states: listed, truncated } =
 		await listCoderSettlementWalStates(directory);
 	const filter = options?.taskIds ? new Set(options.taskIds) : undefined;
@@ -1766,7 +1845,21 @@ export async function recoverStaleCoderSettlements(
 			continue;
 		}
 		// Non-terminal (DISPATCHED/PREPARED).
-		if (entry.ownedInProcess && options?.force !== true) {
+		// 2026-11-24 swarm_communication_debug (restart aftermath): an
+		// in-process registration can LEAK — its drain path (settle, abort, or
+		// the pending-timeout transfer) never ran after a session close or
+		// host restart — and then blocks recovery indefinitely. A registration
+		// whose WAL is older than the maximal legitimate pending lifetime
+		// (configured timeout + grace) is auto-released here instead of
+		// demanding --force: no settle/abort path can still be legitimately
+		// running for it. The foreign-live-pid contract is UNCHANGED — another
+		// process's dispatch is never auto-released from here, because a live
+		// foreign pid may be a genuinely running dispatch in another instance.
+		const ownershipExpired = coderDispatchOwnershipIsStale(
+			{ state: entry.state, recordedAt: entry.recordedAt },
+			pendingTimeoutMinutes,
+		);
+		if (entry.ownedInProcess && options?.force !== true && !ownershipExpired) {
 			results.push({
 				taskId: entry.taskId,
 				outcome: 'owned_in_process',
@@ -1782,7 +1875,13 @@ export async function recoverStaleCoderSettlements(
 			});
 			continue;
 		}
-		const forced = entry.ownedInProcess && options?.force === true;
+		const forced =
+			entry.ownedInProcess && (options?.force === true || ownershipExpired);
+		const releaseReason: 'force' | 'ownership-expired' | undefined = forced
+			? options?.force === true
+				? 'force'
+				: 'ownership-expired'
+			: undefined;
 		// `force` is established at this ownership-release layer only —
 		// recoverCoderSettlement below is the normal recovery path; `forced`
 		// in the result reports that a release was necessary, not that the
@@ -1801,7 +1900,11 @@ export async function recoverStaleCoderSettlements(
 					transitionId: entry.transitionId,
 					actor: 'swarm-recovery',
 				},
-				{ forced: true, stage: 'ownership-release' },
+				{
+					forced: true,
+					stage: 'ownership-release',
+					...(releaseReason ? { reason: releaseReason } : {}),
+				},
 			);
 		}
 		try {
@@ -1858,6 +1961,7 @@ export async function recoverStaleCoderSettlements(
 					// recovery, and repair stay bound to the same receipt.
 					previousTransitionId: entry.transitionId ?? '',
 					previousState: entry.state,
+					...(releaseReason ? { releaseReason } : {}),
 					...(typeof entry.expectedGeneration === 'number'
 						? { expectedGeneration: entry.expectedGeneration }
 						: {}),
@@ -1868,6 +1972,7 @@ export async function recoverStaleCoderSettlements(
 				outcome: 'recovered',
 				accepted: recovered.accepted,
 				forced,
+				...(releaseReason ? { releaseReason } : {}),
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);

@@ -3,13 +3,18 @@
 ## What
 
 Closes the swarm-internal communication failure patterns documented in a
-consumer project's `.swarm/swarm_communication_debug.md` (2026-11-23,
+consumer project's `.swarm/swarm_communication_debug.md` (2026-11-23/24,
 Wirtschaftssimulation): a green `pre_check_batch` that could not be attributed
 after a terminal coder settlement, `phase_complete` reporting
 `REQUIRED_AGENTS_MISSING` with `agentsDispatched: []` although every Stage B
 role had demonstrably run, the architect being unable to write the plugin's
-own loop state file, and docs participation receipts being invalidated by the
-delivery commits of their own closing window.
+own loop state file, docs participation receipts being invalidated by the
+delivery commits of their own closing window, the architect being unable to
+author the keep-the-why personal memory store, plan-critic verdicts going
+unrecorded because the dispatch lacked the explicit gate marker, a legit
+35-minute coder leg being timeout-aborted at the 30-minute default with its
+real committed delivery orphaned, and a leaked in-process dispatch
+registration blocking `/swarm recover` until a manual `--force`.
 
 ### 1. Terminal-settlement Stage A wedge (route `terminal_settlement_wedge`)
 
@@ -110,6 +115,83 @@ moved by the 2.21 and 2.19 delivery commits).
   subprocess call, and the gate read short-circuits on the first fresh
   receipt.
 
+### 5. The keep-the-why personal memory store is a sanctioned write surface
+
+The containment layer rejects every write outside the working directory, and
+the host's `permission.external_directory` setting deliberately does not bind
+it. The keep-the-why skill (AGENTS.md-mandated in consumer projects)
+instructs the architect to author `~/.keep-the-why/<personal>.md` and
+`~/.keep-the-why/projects.json` — those writes were denied with
+`AUTHORITY_ROOT_ESCAPE` and the only workaround was pasting file contents to
+the user (the 2026-11-23 wedge).
+
+- `~/.keep-the-why/**` is now the one sanctioned external write surface: the
+  containment deny is skipped for exactly the keep-the-why directory under
+  the real home — never arbitrary `$HOME` paths. Planted-symlink hardening
+  mirrors the containment walk (no component below the base may be a link;
+  ENOENT is allowed for first-time setup, anything unverifiable fails
+  closed). Containment is the ONLY layer skipped: universal denies,
+  protected paths, zones, prefixes and globs still govern the write.
+- `.keep-the-why/` paths (personal or project-local) classify as the `state`
+  zone, so `projects.json` no longer reaches the config zone through the
+  exemption. Consumers can still lock the store down explicitly
+  (`blockedZones: ["state"]` or a `.keep-the-why/` prefix block).
+
+### 6. Plan-critic dispatch-time marker advisory
+
+The auto-approve predicate is deliberately narrow (audit P2-1: a false
+positive releases the coder gate on an unverified review): only a critic
+dispatch carrying the explicit `critic-gate` marker creates the durable
+plan-critic dispatch binding whose existence is the precondition for ANY
+automatic approval recording. An architect plan review dispatched without
+the marker therefore yields an APPROVED verdict that is never recorded
+mechanically, and the next coder dispatch hits `PLAN_CRITIC_GATE_VIOLATION`
+(three occurrences for one plan in the debug log, also under the fixed
+runtime).
+
+- The fix is advisory at dispatch time, never a widened auto-record: a critic
+  dispatch that reads like a plan review but lacks the marker gets a
+  non-blocking advisory BEFORE the child starts, naming both sanctioned
+  exits — re-dispatch with the `MODE: CRITIC-GATE` marker so the
+  pre-execution baseline binds, or record the landed verdict via
+  `approve_plan_critic` (the audited escape hatch).
+
+### 7. `background_pending_timeout_minutes` default raised 30 → 60
+
+A legitimately long coder leg (23 identities plus 11 task-mandated serial
+verification runs, ~35 minutes) was timeout-aborted at the 30-minute default;
+the "ownership transferred to durable background completion" path then went
+stale and the real, committed delivery was orphaned behind a wedged workflow
+(the 2026-11-24 task-2.20 wedge).
+
+- The schema default and every runtime fallback that reads the knob without
+  a parsed config now share one exported constant
+  (`DEFAULT_BACKGROUND_PENDING_TIMEOUT_MINUTES = 60`). The generated config
+  schema artifact and the recovery guide follow. Consumers with
+  short-lived delegations can lower it as before.
+
+### 8. Leaked in-process dispatch registrations expire for recovery
+
+`/swarm recover` refused a non-terminal settlement WAL while the in-process
+`liveDispatches` registry held its key — with no expiry. When the
+registration's drain path (settle, abort, or the pending-timeout transfer)
+never ran, after a session close or a host restart, the leak blocked
+recovery indefinitely and demanded the human-only `--force` (the
+2026-11-24 restart-aftermath wedge: a registration from a closed parallel
+architect session kept report `owned_in_process` although no coder was
+running).
+
+- A non-terminal WAL whose dispatch timestamp (`recordedAt`, preserved
+  through every WAL rewrite) is older than the configured
+  `background_pending_timeout_minutes` plus a 10-minute grace is past every
+  path that could still legitimately settle it: recovery now auto-releases
+  the registration and proceeds without `--force`, recording
+  `releaseReason: "ownership-expired"` on the outcome and the audit event,
+  and the report line says so.
+- Fail closed everywhere else: a missing or unparsable `recordedAt` never
+  expires, and the foreign-live-pid contract is unchanged — another
+  process's dispatch is never auto-released from this process.
+
 ## Testing
 
 - New: `tests/unit/hooks/guardrails-stage-a-terminal-settlement-wedge.test.ts`
@@ -127,42 +209,68 @@ moved by the 2.21 and 2.19 delivery commits).
   `tests/unit/evidence/phase-participation-workspace-ancestry.test.ts`
   (closing-window forward commits stay fresh, equal-head strict path, orphan
   divergence stales, repository-removal fails closed, trusted background
-  completion under the allowance).
+  completion under the allowance),
+  `tests/unit/workflow/coder-settlement-ownership-expiry.test.ts`
+  (expiry bound: stale/fresh/boundary, PREPARED, terminal and fail-closed
+  arms; auto-release without `--force`, registration drained, conservative
+  window, unparsable timestamp, foreign live pid never auto-released, the
+  schema-default anchor, `--force` release reason),
+  `tests/unit/hooks/delegation-gate-plan-critic-marker-advisory.test.ts`
+  (unmarked plan review gets the advisory and is not blocked; explicit
+  marker and ordinary code review stay silent).
 - Extended: `stage-a-self-report.test.ts` (uncorrelated wedge pass),
   `guardrails-stage-a-route-events.test.ts` (closed vocabulary),
   `zone-classifier.test.ts` (state-zone rules, checkpoints rule order,
-  skip-QA policy), `phase-participation-storage.adversarial.test.ts`
+  skip-QA policy, keep-the-why memory zone, non-dotted negative),
+  `phase-participation-storage.adversarial.test.ts`
   (divergence stays rejected; forward movement documented as fresh),
-  `docs/configuration.md` route table (parity test).
+  `guardrails-swarm-state-zone-authority.test.ts` (keep-the-why containment
+  exemption: personal file, first-time `projects.json`, planted-symlink
+  denial, arbitrary home paths still denied, workspace-local memory,
+  explicit consumer lockdown),
+  `coder-settlement-recovery-helpers.test.ts` (force release reason),
+  `docs/configuration.md` route table (parity test),
+  `docs/troubleshooting/recovery-guide.md` default mention,
+  `opencode-swarm.schema.json` (regenerated: default 60).
 
 ## Invariant audit
 
 - 1 (plugin init): not touched — no init-path changes.
 - 2 (runtime portability): touched via rebuild — `bun run build` +
-  `tests/unit/build/` (226 pass, incl. bundle-portability + plugin-shape);
+  `tests/unit/build/` (incl. bundle-portability + plugin-shape);
   `dist/index.js` remains a self-contained Node-ESM bundle with no `bun:`
   runtime resolution; the Node smoke check runs in CI (`smoke` job) — no local
   Node binary on this host.
 - 3 (subprocesses): touched — `isAncestorCommitAsync` reuses the existing
   `runGitAsync` apparatus (array-form `git -C`, `stdin: 'ignore'`, timeout,
   bounded output, kill in `finally`; revision tokens validated by
-  `isSafeGitRevisionToken`); no new spawn call was written directly.
-- 4 (.swarm containment): not touched — new reads/writes stay on existing
-  `.swarm/` surfaces (settlement WAL read, events.jsonl route line,
-  participation store).
+  `isSafeGitRevisionToken`); no new spawn call was written directly. The
+  ownership expiry adds NO subprocess — it reads the WAL's `recordedAt`.
+- 4 (.swarm containment): touched — the keep-the-why exemption is a
+  deliberate, bounded narrowing of the containment layer for exactly
+  `~/.keep-the-why/**` (planted-symlink-hardened, policy checks still apply,
+  consumer lockdown still possible); all other reads/writes stay on existing
+  `.swarm/` surfaces. The exemption resolves `~` through an `_internals`
+  homedir seam, never a `process.cwd()` caller.
 - 5 (plan durability): not touched.
 - 6 (test_runner safety): not used; validation via explicit-file `bun test`.
-- 7 (test writing): touched — five new bun:test files (117–353 lines, under
+- 7 (test writing): touched — seven new bun:test files (115–356 lines, under
   the FR-006 cap), no `mock.module`, temp dirs via the canonical helpers,
-  real-git fixtures following the established spawnSync pattern.
+  real-git fixtures following the established spawnSync pattern; symlink
+  cases driven through the `#3606`-style `_internals` lstat seam
+  (host-independent, no real symlink creation).
 - 8 (session state): touched — the recording uses the existing bounded
   `phaseAgentsDispatched` set (no new maps); the pending-route carry keeps its
-  existing session/call caps with an extended value shape.
+  existing session/call caps with an extended value shape; the ownership
+  expiry adds no new session state (the leaked registration is deleted, not
+  moved).
 - 9 (guardrails/retry): not touched.
-- 10 (chat/system msg): not touched — advisories ride the existing bounded
-  advisory surfaces.
-- 11 (tool registration): not touched — `scripts/check-tool-registration.ts`
-  passes (142 tools, coherent).
+- 10 (chat/system msg): not touched — the new plan-critic advisory rides the
+  existing bounded `pushAdvisory` queue (dedupe + length cap).
+- 11 (tool registration): not touched — no tool, agent-map, command-shape or
+  help changes.
 - 12 (release/cache): touched — deployed into the host's active
   `~/.cache/opencode/npm/opencode-swarm@latest/<ts>/` install layout with a
-  full pre-change `dist` backup retained for rollback.
+  full pre-change `dist` backup retained for rollback; the local lineage now
+  genuinely carries version 7.205.7 (upstream release merged), matching the
+  registry latest, so no version stamping is involved.

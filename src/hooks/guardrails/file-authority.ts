@@ -12,6 +12,7 @@
 import { execFileSync } from 'node:child_process';
 import * as fsSync from 'node:fs';
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import picomatch from 'picomatch';
 import QuickLRU from 'quick-lru';
@@ -753,8 +754,15 @@ export const DEFAULT_AGENT_AUTHORITY_RULES: Record<string, AgentRule> = {
  */
 export const _internals: {
 	lstatSync: (path: fsSync.PathLike) => fsSync.Stats;
+	/**
+	 * #3754-adjacent test seam for the keep-the-why containment exemption:
+	 * suites point `~` at a temp home (the real host home must never be
+	 * writable from CI). Production callers get the real `os.homedir()`.
+	 */
+	homedir: () => string;
 } = {
 	lstatSync: (ancestorPath) => fsSync.lstatSync(ancestorPath),
+	homedir: () => os.homedir(),
 };
 
 /**
@@ -1139,6 +1147,77 @@ function formatAllowedHints(rules: AgentRule): string {
 	return parts.join(' ');
 }
 
+const KEEP_THE_WHY_DIR_NAME = '.keep-the-why';
+
+/**
+ * Whether `resolvedTarget` is a write into the keep-the-why personal memory
+ * store (`~/.keep-the-why/**`) — the ONE sanctioned write surface outside the
+ * workspace (2026-11-23 swarm_communication_debug AUTHORITY_ROOT_ESCAPE
+ * wedge). The keep-the-why skill (AGENTS.md-mandated in consumer projects)
+ * instructs the architect to author the personal memory file and
+ * `projects.json` there; the containment layer used to deny those writes with
+ * no escape, because the host's permission.external_directory setting does
+ * not bind it. The exemption is deliberately bounded:
+ *
+ * - exactly `.keep-the-why` under the REAL home — never arbitrary `$HOME`
+ *   paths, and project-local `.keep-the-why/` stays inside the workspace
+ *   (contained by the normal rules);
+ * - planted-symlink hardening mirrors the containment walk: no component of
+ *   the target chain below the base may be a symlink (a link there could
+ *   redirect the write outside the sanctioned store). `normalizePathWithCache`
+ *   has already resolved symlinks for existing components, so this walk only
+ *   bites on the not-yet-existing tail — including the first-time-setup shape
+ *   where the base itself does not exist yet;
+ * - containment is the ONLY layer skipped. Every per-agent policy check below
+ *   (universal denies, protected paths, zones, prefixes, globs) still
+ *   governs the write — a consumer can lock the store down explicitly with
+ *   `blockedPrefix: ['.keep-the-why/']` or `blockedZones: ['state']`.
+ */
+function isSanctionedKeepTheWhyWriteTarget(resolvedTarget: string): boolean {
+	let base: string;
+	try {
+		const home = _internals.homedir();
+		if (typeof home !== 'string' || home.length === 0) return false;
+		base = path.resolve(home, KEEP_THE_WHY_DIR_NAME);
+	} catch {
+		return false;
+	}
+	let realBase = base;
+	try {
+		realBase = fsSync.realpathSync(base);
+	} catch {
+		// Base does not exist yet (first-time setup) — compare lexically. The
+		// ancestor walk below still rejects any planted link in the chain.
+	}
+	const rel = path.relative(realBase, resolvedTarget);
+	if (
+		rel === '' ||
+		rel === '..' ||
+		rel.startsWith(`..${path.sep}`) ||
+		path.isAbsolute(rel)
+	) {
+		return false;
+	}
+	// Planted-link hardening: walk the target chain up to (but NOT including)
+	// the base — a symlinked base was resolved above, and the base itself is
+	// the sanctioned boundary, not an attacker-plantable interior node.
+	// ENOENT (component not created yet) is allowed for writes; any other
+	// lstat failure fails closed.
+	let current = resolvedTarget;
+	for (;;) {
+		if (current === realBase) break;
+		try {
+			if (_internals.lstatSync(current).isSymbolicLink()) return false;
+		} catch (err: unknown) {
+			if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+		}
+		const parent = path.dirname(current);
+		if (parent === current) break; // filesystem root
+		current = parent;
+	}
+	return true;
+}
+
 /**
  * Checks file path authority against a pre-computed rules map. Evaluation is
  * staged: safe path + workspace containment; universal and protected denies;
@@ -1268,7 +1347,11 @@ export function checkFileAuthorityWithRules(
 		}
 		return null;
 	};
-	if (isOnDifferentFilesystemRoot(resolvedTarget, dir)) {
+	// The keep-the-why personal memory store is the one sanctioned external
+	// write surface (see isSanctionedKeepTheWhyWriteTarget): skip ONLY the
+	// containment denies for it — the per-agent policy checks below still run.
+	const keepTheWhyExempt = isSanctionedKeepTheWhyWriteTarget(resolvedTarget);
+	if (!keepTheWhyExempt && isOnDifferentFilesystemRoot(resolvedTarget, dir)) {
 		// Even across roots, check if target resides in a linked Git worktree of dir
 		const matchedWorktree = matchWorktreeRoot();
 
@@ -1290,7 +1373,10 @@ export function checkFileAuthorityWithRules(
 				detail: `re-rooted target crosses symlink/junction "${sanitizeDiagnosticText(redactPath(plantedLink), 320)}" — decided by the opencode-swarm file-authority (containment) layer; the host permission.external_directory setting does not bind this layer`,
 			});
 		}
-	} else if (normalizedPath === '..' || normalizedPath.startsWith('../')) {
+	} else if (
+		!keepTheWhyExempt &&
+		(normalizedPath === '..' || normalizedPath.startsWith('../'))
+	) {
 		// Check whether target resides in a linked Git worktree of dir
 		const matchedWorktree = matchWorktreeRoot();
 

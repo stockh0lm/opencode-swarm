@@ -41,7 +41,11 @@ import {
 	resolveActivePhaseId,
 	type Task,
 } from '../config/plan-schema';
-import { isKnownCanonicalRole, stripKnownSwarmPrefix } from '../config/schema';
+import {
+	DEFAULT_BACKGROUND_PENDING_TIMEOUT_MINUTES,
+	isKnownCanonicalRole,
+	stripKnownSwarmPrefix,
+} from '../config/schema';
 import {
 	DEFAULT_QA_GATES,
 	getEffectiveGates,
@@ -80,6 +84,7 @@ import {
 	PLAN_CRITIC_TASK_SIGNALS,
 	recordVerifiedPlanCriticApproval,
 	taskIsExplicitPlanCriticGate,
+	taskLooksLikePlanCritic,
 } from '../plan/critic-approval.js';
 import {
 	approvedSnapshotCoversPlan,
@@ -3904,8 +3909,8 @@ export function createDelegationGateHook(
 	const backgroundSubagentsEnabled = configuredBackgroundSubagents === true;
 	const backgroundPendingTimeoutMs =
 		(((config.hooks as Record<string, unknown> | undefined)
-			?.background_pending_timeout_minutes as number | undefined) ?? 30) *
-		60_000;
+			?.background_pending_timeout_minutes as number | undefined) ??
+			DEFAULT_BACKGROUND_PENDING_TIMEOUT_MINUTES) * 60_000;
 	const MAX_PENDING_CODER_CHANGE_CONTEXTS = 128;
 	const coderTaskChangeContextByCallID = new Map<
 		string,
@@ -5146,6 +5151,30 @@ export function createDelegationGateHook(
 				logger.warn(
 					'[delegation-gate] plan critic-gate dispatch could not bind a pre-execution plan baseline (plan.json unreadable); a later APPROVED verdict will not auto-approve',
 				);
+			}
+		} else if (targetAgent === 'critic' && taskLooksLikePlanCritic(args)) {
+			// 2026-11-24 swarm_communication_debug (3rd recorder miss for one
+			// plan, also under the fixed runtime): the architect dispatched a
+			// critic review that READS like the plan gate but carried no
+			// explicit `critic-gate` marker, so no pre-execution baseline (and
+			// with it no durable plan-critic dispatch binding) was created —
+			// the APPROVED verdict could not be recorded mechanically and the
+			// next coder dispatch hit PLAN_CRITIC_GATE_VIOLATION. The
+			// auto-approve predicate is deliberately narrow (audit P2-1: a
+			// false positive releases the coder gate on an unverified review),
+			// so the fix is advisory at dispatch time, never a widened
+			// auto-record: tell the architect BEFORE the child starts that
+			// this verdict will not bind, and name both sanctioned exits.
+			try {
+				const criticSession = swarmState.agentSessions.get(input.sessionID);
+				if (criticSession) {
+					pushAdvisory(
+						criticSession,
+						'PLAN-CRITIC DISPATCH ADVISORY: this critic dispatch reads like a plan review, but it lacks the explicit `critic-gate` marker (MODE: CRITIC-GATE). Its verdict will NOT be recorded as a mechanical plan-critic approval — the durable plan-critic dispatch binding (and with it every automatic approval recording) is only created for explicit critic-gate dispatches. If this IS the pre-EXECUTE plan gate, re-dispatch with the `MODE: CRITIC-GATE` marker so the pre-execution plan baseline binds. If the verdict has already landed and is correct, record it via approve_plan_critic (the audited escape hatch). This is advisory-only — the dispatch was NOT blocked.',
+					);
+				}
+			} catch {
+				// The advisory path must never throw into the caller (fail-open).
 			}
 		}
 

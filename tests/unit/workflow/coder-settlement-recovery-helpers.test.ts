@@ -185,7 +185,18 @@ describe('issue #2268 — stale settlement recovery helpers', () => {
 			force: true,
 		});
 		expect(results).toEqual([
-			{ taskId: '1.1', outcome: 'recovered', accepted: false, forced: true },
+			{
+				taskId: '1.1',
+				outcome: 'recovered',
+				accepted: false,
+				forced: true,
+				// 2026-11-24 ownership-expiry round: the recovered outcome now
+				// names WHY the release was necessary — the operator's --force
+				// assertion, or the age-based auto-expiry of a leaked
+				// registration (pinned in
+				// coder-settlement-ownership-expiry.test.ts).
+				releaseReason: 'force',
+			},
 		]);
 		expect(readWalJson(directory, '1.1').state).toBe('COMMITTED');
 		expect(

@@ -64,6 +64,27 @@ export function classifyFile(filePath: string): ZoneClassification {
 		};
 	}
 
+	// 1c. STATE - keep-the-why memory (personal ~/.keep-the-why/ reached via
+	// an outside-workspace write, or project-local .keep-the-why/): the
+	// reasoning-memory files the keep-the-why skill instructs agents to
+	// author (the personal memory file, projects.json). Checked BEFORE the
+	// config-extension rule so projects.json and friends never classify as
+	// project configuration — the 2026-11-23 swarm_communication_debug
+	// AUTHORITY_ROOT_ESCAPE follow-up: the containment exemption for
+	// ~/.keep-the-why/ alone would still have blocked these writes through
+	// every default role's blockedZones: ['config'].
+	if (
+		normalized.startsWith('.keep-the-why/') ||
+		normalized.includes('/.keep-the-why/')
+	) {
+		return {
+			filePath,
+			zone: 'state',
+			confidence: 'high',
+			reason: 'path is keep-the-why memory under .keep-the-why/',
+		};
+	}
+
 	// 2. TEST - test files (check before production to catch test files in src/)
 	// test: test/**, tests/**, __tests__/**, *.test.*, *.spec.*, **/mocks/**
 	// Also test files inside src/

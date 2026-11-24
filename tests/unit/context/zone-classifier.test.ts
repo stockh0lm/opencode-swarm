@@ -232,6 +232,26 @@ describe('classifyFile - state zone (.swarm/ runtime state)', () => {
 	});
 });
 
+describe('classifyFile - state zone (keep-the-why memory)', () => {
+	test('returns state zone for keep-the-why memory files (not config)', () => {
+		// The 2026-11-23 swarm_communication_debug AUTHORITY_ROOT_ESCAPE
+		// follow-up: the containment exemption for ~/.keep-the-why/ alone
+		// would still have blocked projects.json through every default
+		// role's blockedZones: ['config'].
+		expect(classifyFile('.keep-the-why/projects.json').zone).toBe('state');
+		expect(classifyFile('.keep-the-why/note.md').zone).toBe('state');
+		expect(classifyFile('/home/u/.keep-the-why/x.md').zone).toBe('state');
+		// The outside-workspace relative form the authority layer evaluates.
+		expect(classifyFile('../../../.keep-the-why/projects.json').zone).toBe(
+			'state',
+		);
+	});
+
+	test('a plain directory named keep-the-why (no dot) is not the memory zone', () => {
+		expect(classifyFile('keep-the-why/projects.json').zone).toBe('config');
+	});
+});
+
 describe('classifyFile - docs zone', () => {
 	test('returns docs zone for docs/** files', () => {
 		const result = classifyFile('/project/docs/guide.md');
