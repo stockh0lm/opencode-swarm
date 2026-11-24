@@ -192,6 +192,37 @@ running).
   expires, and the foreign-live-pid contract is unchanged — another
   process's dispatch is never auto-released from this process.
 
+### 9. Review routing falls back to the durable coder settlement when the in-memory attribution is gone
+
+The dispatch-time review router (reviewer/test_engineer) read the reviewed
+task's changed files ONLY from the parent session's in-memory per-task
+attribution (`getModifiedFilesForTask`). A host restart wipes that map while
+the durable state survives, so every post-restart Stage-B dispatch routed
+`NO_CHANGED_FILES` and persisted the fail-open `review_route_router_error`
+receipt — whose completion the enforcement boundary (rightly) refuses
+terminally: the agent gate receipt never landed, the workflow rotated
+`stage_b_failed`, and the loop hard-blocked because every task needs the
+reviewer gate (the 2026-11-24 restart-era wedge: 6 lost reviewer receipts and
+3 sounding-board receipts across three server instances including a clean
+restart; the pre-restart 2.19 dispatch with a live in-memory map is the working
+counterexample; the coder path stayed healthy because its settlements are
+written at dispatch time).
+
+- The router now falls back to the LATEST SETTLED coder delegation record's
+  `coderSettlement.observedFiles` — the durable executed-contract artifact —
+  exactly mirroring the in-memory semantics (`recordModifiedFilesForTask`
+  replaces the list per coder leg, so the latest settled leg's files, empty
+  after a settled no-mutation leg, are what a live map would hold).
+- Fail-closed by construction: an uncertain delegation store or no settled
+  coder leg keeps today's `NO_CHANGED_FILES` router error — files are never
+  invented for the router, and the completion-side enforcement boundary is
+  completely unchanged (a real route receipt at dispatch is what authorizes
+  the publication, exactly as before).
+- `findLatestSettledCoderFilesForTask` (bounded by the store's own read
+  bounds, the same class as `findByCorrelationIdDetailed`) is routed through
+  the delegation-gate `_internals` seam; the fallback is observable via a
+  debug-gated warn line naming task and file count.
+
 ## Testing
 
 - New: `tests/unit/hooks/guardrails-stage-a-terminal-settlement-wedge.test.ts`
@@ -217,7 +248,12 @@ running).
   schema-default anchor, `--force` release reason),
   `tests/unit/hooks/delegation-gate-plan-critic-marker-advisory.test.ts`
   (unmarked plan review gets the advisory and is not blocked; explicit
-  marker and ordinary code review stay silent).
+  marker and ordinary code review stay silent),
+  `tests/unit/hooks/delegation-gate-review-route-durable-fallback.test.ts`
+  (helper: latest settled leg selection, no-mutation replace semantics,
+  non-coder/other-task skips; gate: post-restart shape routes a REAL receipt
+  instead of the router error, live in-memory attribution wins, no-settlement
+  and uncertain-store keep the pointed NO_CHANGED_FILES refusal).
 - Extended: `stage-a-self-report.test.ts` (uncorrelated wedge pass),
   `guardrails-stage-a-route-events.test.ts` (closed vocabulary),
   `zone-classifier.test.ts` (state-zone rules, checkpoints rule order,
@@ -254,11 +290,13 @@ running).
   homedir seam, never a `process.cwd()` caller.
 - 5 (plan durability): not touched.
 - 6 (test_runner safety): not used; validation via explicit-file `bun test`.
-- 7 (test writing): touched — seven new bun:test files (115–356 lines, under
+- 7 (test writing): touched — eight new bun:test files (115–356 lines, under
   the FR-006 cap), no `mock.module`, temp dirs via the canonical helpers,
   real-git fixtures following the established spawnSync pattern; symlink
   cases driven through the `#3606`-style `_internals` lstat seam
-  (host-independent, no real symlink creation).
+  (host-independent, no real symlink creation); the route-fallback suite uses
+  `createIsolatedTestEnv` for the platform-root-bound receipt secret (#2033)
+  and restores the delegation-gate seam in `afterEach`.
 - 8 (session state): touched — the recording uses the existing bounded
   `phaseAgentsDispatched` set (no new maps); the pending-route carry keeps its
   existing session/call caps with an extended value shape; the ownership
