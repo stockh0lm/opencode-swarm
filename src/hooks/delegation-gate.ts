@@ -20,6 +20,7 @@ import type {
 } from '../background/pending-delegations.js';
 import {
 	buildBackgroundCoderReservationId,
+	findLatestCoderTaskForParentSession,
 	findLatestSettledCoderFilesForTask,
 } from '../background/pending-delegations.js';
 import {
@@ -3516,6 +3517,13 @@ export const _internals = {
 	 */
 	findLatestSettledCoderFilesForTask,
 	/**
+	 * 2026-11-25 agent-gate wedge (layer B): the sounding-board dispatch task
+	 * binding reads through this seam so tests can drive the no-task_id +
+	 * settled-coder shape, the uncertain-store fail-closed shape, and the
+	 * no-coder-delegation refusal shape. Production never reassigns it.
+	 */
+	findLatestCoderTaskForParentSession,
+	/**
 	 * #3403 (review round 3, AC2): the durable scope-claim is routed through this
 	 * seam so tests can drive a claim that THROWS and pin the throw-path lineage
 	 * rollback. Production code never reassigns it.
@@ -6850,12 +6858,47 @@ export function createDelegationGateHook(
 							const mergedArgs = { ...(storedArgs ?? {}), ...directArgs };
 							const normalizedSubagentType =
 								stripKnownSwarmPrefix(subagentType);
-							const evidenceTaskId = await resolveEvidenceTaskId(
+							let evidenceTaskId = await resolveEvidenceTaskId(
 								mergedArgs,
 								session,
 								directory,
 								evidenceTaskResolutionOptions(normalizedSubagentType),
 							);
+							if (
+								evidenceTaskId === null &&
+								normalizedSubagentType === 'critic_sounding_board'
+							) {
+								// 2026-11-25 swarm_communication_debug (restart-era
+								// agent-gate wedge, layer B): a sounding-board dispatch
+								// carries NO task_id argument — the task id rides only in
+								// free prompt prose, which the strict attribution policy
+								// correctly refuses. Before the host-restart era the
+								// in-memory session fallback (currentTaskId) supplied the
+								// binding; after a restart that map is empty and the
+								// record persisted task-less — the completion ingestion is
+								// then a no-op by definition (taskId null → no Stage-B
+								// evidence side effects) and the SB gate receipt can never
+								// land (live: ses_defd94c65ffe, planTaskId null,
+								// ingestion null). Durable substitute for the lost session
+								// context: the LATEST coder delegation of the SAME parent
+								// session — the SB context is the retry escalation of
+								// exactly that coder chain. Fail-closed: an uncertain
+								// store or no coder delegation keeps null.
+								const durableTask =
+									await _internals.findLatestCoderTaskForParentSession(
+										directory,
+										input.sessionID,
+									);
+								if (
+									durableTask.status === 'ok' &&
+									durableTask.taskId !== null
+								) {
+									evidenceTaskId = durableTask.taskId;
+									logger.warn(
+										`[delegation-gate] sounding-board dispatch (call ${input.callID}) bound task ${evidenceTaskId} via the durable latest-coder fallback: no task_id argument and no in-memory session task context (post-restart shape)`,
+									);
+								}
+							}
 							const scope =
 								session.declaredCoderScope &&
 								session.declaredCoderScope.length > 0

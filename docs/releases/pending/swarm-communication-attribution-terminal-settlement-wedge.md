@@ -3,7 +3,7 @@
 ## What
 
 Closes the swarm-internal communication failure patterns documented in a
-consumer project's `.swarm/swarm_communication_debug.md` (2026-11-23/24,
+consumer project's `.swarm/swarm_communication_debug.md` (2026-11-23/24/25,
 Wirtschaftssimulation): a green `pre_check_batch` that could not be attributed
 after a terminal coder settlement, `phase_complete` reporting
 `REQUIRED_AGENTS_MISSING` with `agentsDispatched: []` although every Stage B
@@ -13,8 +13,12 @@ delivery commits of their own closing window, the architect being unable to
 author the keep-the-why personal memory store, plan-critic verdicts going
 unrecorded because the dispatch lacked the explicit gate marker, a legit
 35-minute coder leg being timeout-aborted at the 30-minute default with its
-real committed delivery orphaned, and a leaked in-process dispatch
-registration blocking `/swarm recover` until a manual `--force`.
+real committed delivery orphaned, a leaked in-process dispatch
+registration blocking `/swarm recover` until a manual `--force`, review
+routing losing the changed files across a host restart, and the restart-era
+agent-gate wedge in full: body-less store results silencing every Stage-B
+verdict, task-less sounding-board dispatches, and invisible Stage-B
+binding-write failures.
 
 ### 1. Terminal-settlement Stage A wedge (route `terminal_settlement_wedge`)
 
@@ -223,6 +227,60 @@ written at dispatch time).
   the delegation-gate `_internals` seam; the fallback is observable via a
   debug-gated warn line naming task and file count.
 
+### 10. The restart-era agent-gate wedge, layers A–C: body-less store results, task-less sounding-board dispatches, invisible binding-write failures
+
+The post-fix binding tests (2026-11-25, server pid 315721 running the §9 fix)
+proved the §9 dispatch-side repair works (the reviewer dispatch wrote a REAL
+652-byte route receipt with the durable-fallback file count) — but the gate
+receipts still did not land, because the completion side broke on two further,
+independent layers, plus one latent defect surfaced by the same
+investigation:
+
+- **A — body-less store result shadows the event text** (the `rejected`
+  ingestion): the observer fed the ingestion `ingestion.record.result ??
+  result`. The store's result projection can be BODY-LESS — the checkpoint
+  fold strips the text/error bodies from closed summaries, and a
+  trustedTerminal replay or a duplicate claim surfaces that shape even for a
+  live record (observed live: the SQLite row held
+  `result={chars,digest,truncated}` with NO text one second after a
+  text-bearing terminal claim). A body-less object still wins over the
+  event's full result under `??`, so `structuredStageBVerdict` saw `''`,
+  matched nothing, and the verdict arm rotated `stage_b_failed` + `rejected`
+  — the exact "runtime classified stage_b_failed" symptom in the debug log.
+  The event result — parsed from the host-rendered subagent envelope on THIS
+  invocation (131k bound, full wrapper) — is now the authority whenever the
+  persisted result has no body at all; a body-ful record result (replay
+  shape) still wins. (Host-source verified: `subagent-completion.ts` renders
+  the completion envelope without truncation; the plugin's own 20k render
+  bound is far above the observed 2.5k verdict texts.)
+- **B — task-less sounding-board dispatches** (the SB layer: "not even
+  skill_propagation"): an SB dispatch carries no `task_id` argument — the
+  task id rides only in free prompt prose, which the strict attribution
+  policy correctly refuses. Before the restart era the in-memory session
+  fallback (currentTaskId) supplied the binding; after a restart the
+  delegation record persisted task-less and the completion ingestion was a
+  no-op BY DEFINITION (taskId null → no Stage-B evidence side effects), so
+  the SB gate receipt could never land (live: `ses_defd94c65ffe`,
+  planTaskId null, terminalResult present, ingestion null). The gate now
+  binds the task durably via the LATEST coder delegation of the same parent
+  session — the SB context is the retry escalation of exactly that coder
+  chain — fail-closed on an uncertain store or no coder delegation.
+- **C — invisible binding-write failures** (latent #2817/#2829 class): the
+  Stage-B dispatch-binding store's `catch { return false }` discarded the
+  write failure's cause entirely, and the gate's always-emitted criticalWarn
+  goes to the host stderr, which `opencode serve --service` pipes into a
+  supervisor socket — zero diagnosable signal. Observed live: every Stage-B
+  dispatch in the consumer project left an EMPTY session dir (mkdir
+  succeeded, the temp-write/rename phase failed; mtime forensics across two
+  days and four server instances) while the same code+path writes perfectly
+  from a plain process. The store now emits the always-visible warning WITH
+  the errno code and appends a bounded, project-visible
+  `.write-errors.jsonl` (last 16 entries) inside the store root, so the next
+  failing dispatch leaves a durable trace the operator can read. The
+  background completion path does not read these bindings (the rejection was
+  layers A/B, not this store), but every FOREGROUND settlement would have
+  hit the unbound fail-closed drop.
+
 ## Testing
 
 - New: `tests/unit/hooks/guardrails-stage-a-terminal-settlement-wedge.test.ts`
@@ -253,7 +311,19 @@ written at dispatch time).
   (helper: latest settled leg selection, no-mutation replace semantics,
   non-coder/other-task skips; gate: post-restart shape routes a REAL receipt
   instead of the router error, live in-memory attribution wins, no-settlement
-  and uncertain-store keep the pointed NO_CHANGED_FILES refusal).
+  and uncertain-store keep the pointed NO_CHANGED_FILES refusal),
+  `tests/unit/background/completion-observer-stage-b-result-body-fallback.test.ts`
+  (body-less store result does not shadow the event text — the verdict parses,
+  outcome accepted, gate receipt lands; body-ful duplicate-claim shape stays
+  accepted),
+  `tests/unit/hooks/delegation-gate-sb-durable-task-binding.test.ts`
+  (helper: latest coder task of the session, non-coder/foreign fail-closed;
+  gate: a task-less sounding-board dispatch in the post-restart shape binds
+  the durable latest-coder task),
+  `tests/unit/background/stage-b-binding-write-diagnostic.test.ts`
+  (failing atomic write surfaces the errno in the bounded store-root
+  `.write-errors.jsonl`; a healthy write leaves no diagnostic and persists
+  the record).
 - Extended: `stage-a-self-report.test.ts` (uncorrelated wedge pass),
   `guardrails-stage-a-route-events.test.ts` (closed vocabulary),
   `zone-classifier.test.ts` (state-zone rules, checkpoints rule order,
@@ -290,13 +360,15 @@ written at dispatch time).
   homedir seam, never a `process.cwd()` caller.
 - 5 (plan durability): not touched.
 - 6 (test_runner safety): not used; validation via explicit-file `bun test`.
-- 7 (test writing): touched — eight new bun:test files (115–356 lines, under
+- 7 (test writing): touched — eleven new bun:test files (115–356 lines, under
   the FR-006 cap), no `mock.module`, temp dirs via the canonical helpers,
   real-git fixtures following the established spawnSync pattern; symlink
   cases driven through the `#3606`-style `_internals` lstat seam
   (host-independent, no real symlink creation); the route-fallback suite uses
   `createIsolatedTestEnv` for the platform-root-bound receipt secret (#2033)
-  and restores the delegation-gate seam in `afterEach`.
+  and restores the delegation-gate seam in `afterEach`; the write-diagnostic
+  suite restores the atomic-write rename seam in `afterEach`; the SB-binding
+  suite drives the real gate hook with the v1 running-envelope output shape.
 - 8 (session state): touched — the recording uses the existing bounded
   `phaseAgentsDispatched` set (no new maps); the pending-route carry keeps its
   existing session/call caps with an extended value shape; the ownership
