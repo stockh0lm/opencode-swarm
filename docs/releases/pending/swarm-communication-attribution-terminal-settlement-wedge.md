@@ -281,6 +281,19 @@ investigation:
   layers A/B, not this store), but every FOREGROUND settlement would have
   hit the unbound fail-closed drop.
 
+- **D — task-less SB dispatches carried no workflow generation** (the
+  `ingestion_error` loop): the in-memory generation map
+  (`stageBDispatchGenerationsByCallID`) is filled in the dispatch-preparation
+  path keyed by the RESOLVED task id — which was null for a task-less SB
+  dispatch even after the layer-B binding (that resolves only in toolAfter),
+  so the record carried NO `workflowGeneration` and the completion ingestion
+  refused with `TASK_WORKFLOW_GENERATION_REQUIRED` forever (live:
+  `ses_ded837dfdffe`, status `ingestion_error`, retryable loop, advisory
+  "ingestion failed" while the verdict itself was APPROVED). The SB arm now
+  binds the workflow generation from the durable task evidence at dispatch
+  time — the same fence input the in-memory map would hold; no readable
+  evidence keeps the refusal (fail closed).
+
 ## Testing
 
 - New: `tests/unit/hooks/guardrails-stage-a-terminal-settlement-wedge.test.ts`
