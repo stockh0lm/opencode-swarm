@@ -256,6 +256,7 @@ import {
 	recordDeniedToolCall,
 } from './hooks/trajectory-logger';
 import { estimateTokens } from './hooks/utils';
+import { setDelegationTraceConfigEnabled } from './host/v2/delegation-trace';
 import {
 	applyV2AgentModelOverride,
 	hasV2AgentTransformSurface,
@@ -1536,6 +1537,16 @@ async function initializeOpenCodeSwarm(
 		: Promise.resolve(null);
 	await Promise.all([configLoadP, snapshotP, gitExcludeP, projectContextP]);
 	const { config, loadedFromFile } = await configLoadP;
+	// r17 §8 tracer activation (config-gated): the delegation critical-path
+	// tracer activates from the project's plugin config
+	// (observability.delegationTrace.enabled) — a Desktop-spawned
+	// `opencode serve --service` inherits its environment from the app
+	// session, so the per-project config is the reliable activation path;
+	// SWARM_DELEGATION_TRACE=1 remains the env override. Rides the init's own
+	// bounded, fail-open config load (no extra I/O; invariant 1 untouched).
+	setDelegationTraceConfigEnabled(
+		config?.observability?.delegationTrace?.enabled === true,
+	);
 	if (rootDecision.kind === 'redirect') {
 		// Actionable, bounded parent-root hint (AC1), delivered WITHOUT a raw
 		// stderr leg: a plugin console.warn renders as a full-width overlay

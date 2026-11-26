@@ -184,7 +184,6 @@ import {
 	setV2OperatorQuiet,
 	setV2OperatorQuietForOwner,
 } from './agents-commands';
-import { setDelegationTraceConfigEnabled } from './delegation-trace';
 import { clearToolNameRegistry, startDeferredEventPump } from './events';
 import { registerV2ContextHook } from './guidance';
 import {
@@ -386,27 +385,6 @@ export async function openCodeSwarmV2Setup(
 					? rootDecision.directory
 					: rawDirectory;
 		const state: CollectedState = createRegistrationSink();
-		// r17 §8 tracer activation (config-gated): the delegation critical-path
-		// tracer activates from the project's plugin config
-		// (observability.delegationTrace.enabled) — a Desktop-spawned
-		// `opencode serve --service` inherits its environment from the app
-		// session, so the per-project config is the reliable activation path;
-		// SWARM_DELEGATION_TRACE=1 remains the env override. Bounded,
-		// fail-open: an unreadable config keeps the env-only activation and
-		// never blocks setup (invariant 1).
-		try {
-			const loadedConfig = await withTimeout(
-				loadPluginConfigWithMetaAsync(directory),
-				2_000,
-				new Error('[opencode-swarm] v2 setup: tracer config read timed out'),
-			);
-			setDelegationTraceConfigEnabled(
-				loadedConfig?.config?.observability?.delegationTrace?.enabled === true,
-			);
-		} catch {
-			setDelegationTraceConfigEnabled(false);
-		}
-
 		// This must precede runInit: the shared v1 gate reads the v2 host mode
 		// while constructing its dispatch/settlement hooks. Unknown host
 		// versions deliberately retain the legacy foreground semantics.

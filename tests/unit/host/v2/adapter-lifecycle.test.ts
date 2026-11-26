@@ -7,8 +7,6 @@
  */
 
 import { afterEach, describe, expect, test } from 'bun:test';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import {
 	registerV2SessionHooks,
 	registerV2ToolHooks,
@@ -113,55 +111,6 @@ describe('setup fail-closed + cleanup ordering (PRR-011)', () => {
 		// while the pump is live rather than after it was torn down.
 		expect(order.indexOf('subscribe')).toBeGreaterThan(-1);
 		expect(order.indexOf('subscribe')).toBeLessThan(order.indexOf('dispose'));
-	});
-
-	test('setup activates the delegation tracer from the project plugin config (observability.delegationTrace.enabled)', async () => {
-		const { _resetDelegationTraceForTesting, isDelegationTraceActive } =
-			await import('../../../../src/host/v2/delegation-trace');
-		const directory = canonicalMkdtemp('swarm-v2-trace-cfg-');
-		// The reliable activation path for a Desktop-spawned serve: the
-		// project's plugin config, read (bounded, fail-open) during v2 setup.
-		fs.mkdirSync(path.join(directory, '.opencode'), { recursive: true });
-		fs.writeFileSync(
-			path.join(directory, '.opencode', 'opencode-swarm.json'),
-			JSON.stringify({
-				observability: { delegationTrace: { enabled: true } },
-			}),
-			'utf-8',
-		);
-		delete process.env.SWARM_DELEGATION_TRACE;
-		const registration = { dispose: async () => {} };
-		const ctx = {
-			app: { name: 'opencode', version: 'test', channel: 'test' },
-			location: {
-				directory,
-				workspaceID: 'w',
-				project: { id: 'p', directory, canonical: directory },
-			},
-			options: {},
-			tool: {
-				transform: async () => registration,
-				reload: async () => {},
-				list: async () => [],
-				hook: async () => registration,
-			},
-			agent: { transform: async () => registration, reload: async () => {} },
-			command: { transform: async () => registration, reload: async () => {} },
-			session: { hook: async () => registration },
-			event: {
-				subscribe: () => (async function* () {})(),
-			},
-			permission: {},
-		} as never;
-		const deps = { runInit: async () => makeHooks({}) };
-		try {
-			const cleanup = await openCodeSwarmV2Setup(ctx, deps as never);
-			expect(isDelegationTraceActive()).toBe(true);
-			await cleanup();
-		} finally {
-			_resetDelegationTraceForTesting();
-		}
-		expect(isDelegationTraceActive()).toBe(false);
 	});
 });
 

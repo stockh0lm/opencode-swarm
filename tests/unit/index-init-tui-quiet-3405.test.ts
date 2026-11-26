@@ -367,6 +367,43 @@ describe('init-path raw console silence (#3405)', () => {
 	);
 
 	test(
+		'delegation tracer activates from the project plugin config (observability.delegationTrace.enabled) — the reliable path for a Desktop-spawned serve',
+		async () => {
+			delete process.env.OPENCODE_SWARM_DEBUG;
+			delete process.env.OPENCODE_SWARM_VERSION_BANNER;
+			delete process.env.SWARM_DELEGATION_TRACE;
+			const { _resetDelegationTraceForTesting, isDelegationTraceActive } =
+				await import('../../src/host/v2/delegation-trace');
+			const root = fixtureRoot('swarm3405-trace-config-');
+			fs.mkdirSync(path.join(root, '.opencode'), { recursive: true });
+			fs.writeFileSync(
+				path.join(root, '.opencode', 'opencode-swarm.json'),
+				JSON.stringify({
+					observability: { delegationTrace: { enabled: true } },
+				}),
+				'utf-8',
+			);
+			try {
+				expect(isDelegationTraceActive()).toBe(false);
+				await bootAndSettle(root, 300);
+				expect(isDelegationTraceActive()).toBe(true);
+			} finally {
+				_resetDelegationTraceForTesting();
+			}
+			// Control: without the flag (and no env var) a plain boot keeps
+			// the tracer off — the env-only default is unchanged.
+			const plain = fixtureRoot('swarm3405-trace-plain-');
+			try {
+				await bootAndSettle(plain, 300);
+				expect(isDelegationTraceActive()).toBe(false);
+			} finally {
+				_resetDelegationTraceForTesting();
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
 		'banner: silent on every raw stream by default',
 		async () => {
 			delete process.env.OPENCODE_SWARM_VERSION_BANNER;
