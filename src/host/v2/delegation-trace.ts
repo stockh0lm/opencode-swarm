@@ -81,8 +81,22 @@ const cumulative = {
 	dispatchWindowsTotal: 0,
 };
 
+/**
+ * Config-gated activation (observability.delegationTrace.enabled in the
+ * project's plugin config). The env var SWARM_DELEGATION_TRACE=1 remains the
+ * documented override; either source activates the tracer. The config path
+ * exists because a Desktop-spawned `opencode serve --service` inherits its
+ * environment from the app session, which is fragile to control per-user —
+ * the per-project plugin config rides the normal config load instead.
+ */
+let configEnabled = false;
+
+export function setDelegationTraceConfigEnabled(enabled: boolean): void {
+	configEnabled = enabled;
+}
+
 function enabled(): boolean {
-	return process.env.SWARM_DELEGATION_TRACE === '1';
+	return configEnabled || process.env.SWARM_DELEGATION_TRACE === '1';
 }
 
 function now(): number {
@@ -103,6 +117,11 @@ function stateFor(sessionID: string): SessionTraceState {
 		sessionStates.set(sessionID, state);
 	}
 	return state;
+}
+
+/** The pump-side gate shares the tracer's activation sources (env or config). */
+export function isDelegationTraceActive(): boolean {
+	return enabled();
 }
 
 function emit(record: Record<string, unknown>): void {
@@ -339,6 +358,7 @@ export function emitDelegationTraceSummary(): void {
 
 /** Test-only: reset the bounded tracer state. */
 export function _resetDelegationTraceForTesting(): void {
+	configEnabled = false;
 	sessionStates.clear();
 	dispatchWindows.length = 0;
 	cumulative.parentTurns = 0;

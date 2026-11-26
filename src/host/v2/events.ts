@@ -41,6 +41,7 @@ import { recordSessionChatAgent } from '../../models/task-model-routing';
 import { log } from '../../utils';
 import { withTimeout } from '../../utils/timeout';
 import {
+	isDelegationTraceActive,
 	noteDelegationHostEvent,
 	noteDelegationToolEvent,
 } from './delegation-trace';
@@ -131,7 +132,7 @@ function noteDelegationTraceEnvelope(
 	envelope: V2EventEnvelope,
 	lookupToolName: (sessionID: string, callID: string) => string | undefined,
 ): void {
-	if (process.env.SWARM_DELEGATION_TRACE !== '1') return;
+	if (!isDelegationTraceActive()) return;
 	try {
 		const type = typeof envelope?.type === 'string' ? envelope.type : undefined;
 		if (type === undefined) return;

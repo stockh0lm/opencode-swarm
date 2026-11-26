@@ -1991,9 +1991,22 @@ export const OtlpExportConfigSchema = z.object({
 
 export type OtlpExportConfig = z.infer<typeof OtlpExportConfigSchema>;
 
-/** Observability block. Only the opt-in remote export today. */
+/** Observability block. The opt-in remote export and the delegation tracer. */
 export const ObservabilityConfigSchema = z.object({
 	export: OtlpExportConfigSchema.optional(),
+	/**
+	 * Local delegation critical-path tracer (r17 §8 instrumentation): separates
+	 * MODEL/PROVIDER wait time from SWARM-CAUSED wait time per delegation
+	 * (dispatch window, first-token estimates, terminal→delivery, wasted
+	 * status-only parent turns). Records go to the serve's stderr as
+	 * `[SWARM_DELEGATION_TRACE] {json}` lines. Default off; the env var
+	 * SWARM_DELEGATION_TRACE=1 activates it regardless of this flag.
+	 */
+	delegationTrace: z
+		.object({
+			enabled: z.boolean().default(false),
+		})
+		.optional(),
 });
 
 export type ObservabilityConfig = z.infer<typeof ObservabilityConfigSchema>;

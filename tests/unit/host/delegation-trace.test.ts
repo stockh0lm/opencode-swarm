@@ -12,12 +12,15 @@
  *   - everything stays silent when the env flag is off (privacy default).
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { ObservabilityConfigSchema } from '../../../src/config/schema';
 import {
 	_resetDelegationTraceForTesting,
 	emitDelegationTraceSummary,
+	isDelegationTraceActive,
 	noteDelegationHostEvent,
 	noteDelegationToolEvent,
 	noteDispatchRunning,
+	setDelegationTraceConfigEnabled,
 } from '../../../src/host/v2/delegation-trace';
 
 const PARENT = 'ses-parent-trace';
@@ -56,6 +59,38 @@ describe('delegation critical-path tracer (r17 §8)', () => {
 		delete process.env.SWARM_DELEGATION_TRACE;
 		noteDispatchRunning(PARENT, 'call-1');
 		noteDelegationHostEvent(PARENT, 'session.step.ended');
+		expect(lines).toHaveLength(0);
+	});
+
+	test('config-gated activation: observability.delegationTrace.enabled turns the tracer on without the env var', () => {
+		// The reliable activation path for a Desktop-spawned serve: the
+		// project plugin config, wired through setDelegationTraceConfigEnabled
+		// at v2 setup. Env var deliberately absent.
+		delete process.env.SWARM_DELEGATION_TRACE;
+		const parsed = ObservabilityConfigSchema.parse({
+			delegationTrace: { enabled: true },
+		});
+		expect(parsed.delegationTrace?.enabled).toBe(true);
+
+		setDelegationTraceConfigEnabled(parsed.delegationTrace?.enabled === true);
+		expect(isDelegationTraceActive()).toBe(true);
+		noteDispatchRunning(PARENT, 'call-1');
+		noteDelegationHostEvent(PARENT, 'session.step.ended');
+		emitDelegationTraceSummary();
+		expect(lines.length).toBeGreaterThan(0);
+		expect(
+			lines.some((line) => line.startsWith('[SWARM_DELEGATION_TRACE] ')),
+		).toBe(true);
+	});
+
+	test('config activation is cleared by the test reset and off by default', () => {
+		delete process.env.SWARM_DELEGATION_TRACE;
+		expect(isDelegationTraceActive()).toBe(false);
+		setDelegationTraceConfigEnabled(true);
+		expect(isDelegationTraceActive()).toBe(true);
+		_resetDelegationTraceForTesting();
+		expect(isDelegationTraceActive()).toBe(false);
+		noteDispatchRunning(PARENT, 'call-1');
 		expect(lines).toHaveLength(0);
 	});
 
