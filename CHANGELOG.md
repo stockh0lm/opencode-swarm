@@ -1,5 +1,40 @@
 # Changelog
 
+## [7.205.10](https://github.com/ZaxbyHub/opencode-swarm/compare/v7.205.9...v7.205.10) (2026-11-26)
+
+
+### Bug Fixes
+
+* **observability:** repoint store_lock_stale_broken citation to :691 ([e7c10f0](https://github.com/ZaxbyHub/opencode-swarm/commit/e7c10f006cfac1452d96b3af0b01e50b2f646303))
+* **observability:** repoint store_lock_stale_broken producer citation to :688 ([#3934](https://github.com/ZaxbyHub/opencode-swarm/issues/3934)) ([4134926](https://github.com/ZaxbyHub/opencode-swarm/commit/4134926ac8b10c3aa2b43973a3b62f72c3936e82))
+* **parallel:** guard statSync in ownerless ageMs fallback; add regression tests ([#3934](https://github.com/ZaxbyHub/opencode-swarm/issues/3934)) ([c1e8342](https://github.com/ZaxbyHub/opencode-swarm/commit/c1e8342f9da035f9d354fddbda4460c1bc1045aa))
+* **parallel:** recover ownerless plan locks past TTL on acquire path ([#3934](https://github.com/ZaxbyHub/opencode-swarm/issues/3934)) ([427da81](https://github.com/ZaxbyHub/opencode-swarm/commit/427da81bea0746b80a353f92b14774ca4b58e402))
+* **parallel:** recover ownerless plan locks past TTL on acquire path ([#3934](https://github.com/ZaxbyHub/opencode-swarm/issues/3934)) ([97928ce](https://github.com/ZaxbyHub/opencode-swarm/commit/97928cecb5a0ad9a4d39688d1a130caa1edbd638))
+* **ratchet:** repoint target-constant-tmp producer citation for file-locks temp ([#3934](https://github.com/ZaxbyHub/opencode-swarm/issues/3934)) ([da1341c](https://github.com/ZaxbyHub/opencode-swarm/commit/da1341c9faa8d23ce60d6bff840b02bf3d615fd2))
+* **registry:** repoint file-locks citations after comment reflow ([#3934](https://github.com/ZaxbyHub/opencode-swarm/issues/3934)) ([07163da](https://github.com/ZaxbyHub/opencode-swarm/commit/07163da36c624125b78e418cc9bce1bd5557afd7))
+* **registry:** repoint file-locks citations after line shifts ([#3934](https://github.com/ZaxbyHub/opencode-swarm/issues/3934)) ([5491b65](https://github.com/ZaxbyHub/opencode-swarm/commit/5491b654eb71897238ba726895b67a2b056279a9))
+* **security:** remove useless catch in replay-identity (biome noUselessCatch) ([f3bb2eb](https://github.com/ZaxbyHub/opencode-swarm/commit/f3bb2eb7fb47ab88d7abecb4d227f9bb9553f225))
+
+## [7.205.9](https://github.com/ZaxbyHub/opencode-swarm/compare/v7.205.8...v7.205.9) (2026-11-25)
+
+
+### Bug Fixes
+
+* **ci:** macOS realpath containment in resolveSafeScopeFileForUnlink; register scope-persistence blind spots ([#3889](https://github.com/ZaxbyHub/opencode-swarm/issues/3889)) ([4699c65](https://github.com/ZaxbyHub/opencode-swarm/commit/4699c652940423b753b6c8b84e67c5f449c102eb))
+* **ci:** re-pin retention-registry citations after scope-persistence comment shift ([#3889](https://github.com/ZaxbyHub/opencode-swarm/issues/3889)) ([41050b7](https://github.com/ZaxbyHub/opencode-swarm/commit/41050b7f34bcb5d44528c2bd26fb34097f632b0a))
+* **ci:** re-pin retention-registry citations after scope-persistence line shifts ([#3889](https://github.com/ZaxbyHub/opencode-swarm/issues/3889)) ([fbb83d1](https://github.com/ZaxbyHub/opencode-swarm/commit/fbb83d1eec7ab321e6ded191b552fb2f1c6e89fc))
+* **scope:** scope-binding store lifecycle — deny ledger, class-faithful diagnostics, reset recovery, tombstone preservation ([#3889](https://github.com/ZaxbyHub/opencode-swarm/issues/3889), [#3900](https://github.com/ZaxbyHub/opencode-swarm/issues/3900)) ([106075e](https://github.com/ZaxbyHub/opencode-swarm/commit/106075e58e17a6e4e70399aa5254bc3f6ab3810e))
+* **scope:** scope-binding store lifecycle — deny ledger, class-faithful diagnostics, reset recovery, tombstone preservation ([#3889](https://github.com/ZaxbyHub/opencode-swarm/issues/3889), [#3900](https://github.com/ZaxbyHub/opencode-swarm/issues/3900)) ([cb4dcc8](https://github.com/ZaxbyHub/opencode-swarm/commit/cb4dcc8b415a3682e6c3537433404c83b9d855cc))
+
+## [7.205.8](https://github.com/ZaxbyHub/opencode-swarm/compare/v7.205.7...v7.205.8) (2026-11-24)
+
+
+### Bug Fixes
+
+* **issue-tracer:** accept two-parent merge commits in merge_identity ([fbc4bba](https://github.com/ZaxbyHub/opencode-swarm/commit/fbc4bba20695083d51401c2a530bd192c84b884b))
+* **issue-tracer:** accept two-parent merge commits in merge_identity ([2fa0cc9](https://github.com/ZaxbyHub/opencode-swarm/commit/2fa0cc983fa602642b83105001feec987210274c))
+* **security:** redact credentials at the review, forge and training evidence boundaries ([#3840](https://github.com/ZaxbyHub/opencode-swarm/issues/3840)/[#3844](https://github.com/ZaxbyHub/opencode-swarm/issues/3844)/[#3899](https://github.com/ZaxbyHub/opencode-swarm/issues/3899)) ([8889183](https://github.com/ZaxbyHub/opencode-swarm/commit/88891837cf8cc6e02d6d71a09f364e799729f328))
+
 ## [7.205.7](https://github.com/ZaxbyHub/opencode-swarm/compare/v7.205.6...v7.205.7) (2026-11-24)
 
 
