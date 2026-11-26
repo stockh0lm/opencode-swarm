@@ -7679,6 +7679,72 @@ export function findLatestSettledCoderFilesForTask(
 }
 
 /**
+ * Durable Stage-A settlement receipt for background-dispatched coder rounds
+ * (the 2026-11-26 task 2.14 wedge).
+ *
+ * A background coder round that reached a completed terminal, settled its
+ * coder settlement (state 'settled'), and had its completion durably
+ * consumed with ingestion outcome 'accepted' holds the same durable
+ * settlement fact the #2828 Stage-A recovery reads from a COMMITTED
+ * settlement WAL or a chain-verified accepted_mutation requirements
+ * receipt. For a verification-only round — the deliverable landed outside
+ * the delegation lane (e.g. user-committed after a liveness-stale
+ * predecessor, observed live: task 2.14, WAL ABORTED-by-transfer, zero
+ * observed files, ingestion accepted) — this settled record is the ONLY
+ * durable receipt that the round ran and completed. Without it the
+ * supervised recovery and the /swarm recover scan refuse with
+ * RECOVER_STAGE_A_SETTLEMENT_REQUIRED and the task wedges at idle with no
+ * agent-legal exit (recover_stage_a_task refuses, retry dispatches just
+ * re-settle no-mutation).
+ *
+ * Mirrors findLatestSettledCoderFilesForTask's read semantics: latest
+ * settlement by `updatedAt`, `>=` resolves same-tick ties to the later
+ * record in store order (the fold's own last-write-wins). Fail-closed: an
+ * uncertain store read yields `{ status: 'uncertain' }` and the caller
+ * keeps null — a justification is never invented from a partial read.
+ */
+export function findLatestSettledBackgroundCoderSettlement(
+	directory: string,
+	taskId: string,
+):
+	| {
+			status: 'ok';
+			settlement: {
+				correlationId: string;
+				settledAtMs: number;
+				observedFiles: string[];
+				ingestionOutcome: string | null;
+			} | null;
+	  }
+	| { status: 'uncertain' } {
+	if (!taskId) return { status: 'ok', settlement: null };
+	const read = readDelegationsDetailed(directory);
+	if (read.status === 'uncertain') return { status: 'uncertain' };
+	let latest: {
+		correlationId: string;
+		settledAtMs: number;
+		observedFiles: string[];
+		ingestionOutcome: string | null;
+	} | null = null;
+	for (const record of read.records) {
+		if (record.normalizedAgent !== 'coder') continue;
+		const recordTaskId = record.evidenceTaskId ?? record.planTaskId;
+		if (recordTaskId !== taskId) continue;
+		const settlement = record.coderSettlement;
+		if (settlement?.state !== 'settled') continue;
+		if (latest === null || settlement.updatedAt >= latest.settledAtMs) {
+			latest = {
+				correlationId: record.correlationId,
+				settledAtMs: settlement.updatedAt,
+				observedFiles: [...(settlement.observedFiles ?? [])],
+				ingestionOutcome: record.ingestion?.outcome ?? null,
+			};
+		}
+	}
+	return { status: 'ok', settlement: latest };
+}
+
+/**
  * Durable task-binding fallback for sounding-board dispatches (the
  * 2026-11-25 restart-era agent-gate wedge, layer B).
  *
