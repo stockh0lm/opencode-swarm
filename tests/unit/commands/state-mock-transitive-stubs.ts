@@ -32,6 +32,12 @@ export const STATE_MOCK_TRANSITIVE_STUBS = {
 	getPrimaryOwner: () => undefined,
 	isRegisteredSwarmSubagent: () => false,
 	isSwarmOwnedSession: () => false,
+	// #3968: reviewer-scope supersession predicate, reached transitively
+	// through stage-b-gates.ts (its stale-consume path imports it from
+	// state.js); same missing-binding failure class as above — without this
+	// inert stub, co-running the close suites with any stage-b suite makes
+	// Bun fail the whole file at import time.
+	isReviewerScopeGenerationSupersededForCoderCall: () => false,
 	// Issue #3036: dispatch-lineage exports reached transitively through the
 	// delegation-gate / delegate-directive-injection / knowledge-receipt-tool
 	// importers; same missing-binding failure class as above.
