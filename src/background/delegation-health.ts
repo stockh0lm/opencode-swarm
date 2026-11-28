@@ -117,6 +117,7 @@ export interface DelegationMaintenanceFact {
 		| 'retained-ambiguity'
 		| 'retained-protected-legacy'
 		| 'lease-renewed'
+		| 'scope-binding-renewal'
 		| 'maintenance-failure'
 		| 'lock-contention';
 	reservationId?: string;
@@ -230,6 +231,7 @@ export const DelegationMaintenanceFactSchema = z
 			'retained-ambiguity',
 			'retained-protected-legacy',
 			'lease-renewed',
+			'scope-binding-renewal',
 			'maintenance-failure',
 			'lock-contention',
 		]),

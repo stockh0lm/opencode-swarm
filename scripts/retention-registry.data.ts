@@ -494,12 +494,12 @@ export const RETENTION_REGISTRY: readonly RetentionRow[] = [
 			'src/hooks/pr-workflow-gate.ts',
 		],
 		writerCitations: [
-			'src/background/pending-delegations.ts:3698 appendRecord — SQLite coordination event+state transaction with post-commit JSON projection',
-			'src/background/pending-delegations.ts:1910 writeDurableFileSync — fsync+rename-with-retry for legacy checkpoint/manifest/rolled-tail compatibility',
+			'src/background/pending-delegations.ts:3699 appendRecord — SQLite coordination event+state transaction with post-commit JSON projection',
+			'src/background/pending-delegations.ts:1911 writeDurableFileSync — fsync+rename-with-retry for legacy checkpoint/manifest/rolled-tail compatibility',
 		],
 		readerCitations: [
-			'src/background/pending-delegations.ts:3587 readDelegations — SQLite authority with bounded legacy compatibility, sync',
-			'src/background/pending-delegations.ts:3602 scanDelegationsForRecovery — strict, fails closed',
+			'src/background/pending-delegations.ts:3588 readDelegations — SQLite authority with bounded legacy compatibility, sync',
+			'src/background/pending-delegations.ts:3603 scanDelegationsForRecovery — strict, fails closed',
 			'pr-workflow-session-resolver / pr-workflow-gate / init-orphan-recovery / delegation-gate worktree-collision-ownership — via readDelegations',
 		],
 		schemaVersion:
@@ -547,8 +547,8 @@ export const RETENTION_REGISTRY: readonly RetentionRow[] = [
 		pathGrammar: '.swarm/background-delegations-health.json',
 		canonicalRoot: 'project-swarm',
 		writerModules: ['src/background/delegation-health.ts'],
-		writerCitations: ['src/background/delegation-health.ts:361 writeDelegationHealthArtifact — temp+rename-retry'],
-		readerCitations: ['src/background/delegation-health.ts:338 readDelegationHealthArtifact — single-file, sync; :575 collectDelegationLedgerHealth'],
+		writerCitations: ['src/background/delegation-health.ts:363 writeDelegationHealthArtifact — temp+rename-retry'],
+		readerCitations: ['src/background/delegation-health.ts:340 readDelegationHealthArtifact — single-file, sync; :577 collectDelegationLedgerHealth'],
 		schemaVersion: 'schemaVersion 1 (:250)',
 		stateClass: 'derived-rebuildable',
 		privacyClass: 'metadata',
@@ -609,12 +609,12 @@ export const RETENTION_REGISTRY: readonly RetentionRow[] = [
 		canonicalRoot: 'project-swarm',
 		writerModules: ['src/background/pending-delegations.ts'],
 		writerCitations: [
-			'src/background/pending-delegations.ts:7628 writeDelegationFallback / :7679 removeDelegationFallback',
-			'src/background/pending-delegations.ts:8306 writeBackgroundCoderReservations',
+			'src/background/pending-delegations.ts:7629 writeDelegationFallback / :7680 removeDelegationFallback',
+			'src/background/pending-delegations.ts:8307 writeBackgroundCoderReservations',
 		],
 		readerCitations: [
-			'src/background/pending-delegations.ts:7483 readDelegationFallback / :7495 listDelegationFallbacks / :7529 scanDelegationFallbacksForRecovery',
-			'src/background/pending-delegations.ts:8284 scanBackgroundCoderReservationsForAdmission',
+			'src/background/pending-delegations.ts:7484 readDelegationFallback / :7496 listDelegationFallbacks / :7530 scanDelegationFallbacksForRecovery',
+			'src/background/pending-delegations.ts:8285 scanBackgroundCoderReservationsForAdmission',
 		],
 		schemaVersion: 'fallback schemaVersion 1 (:1041)',
 		stateClass: 'authoritative',
@@ -1766,10 +1766,10 @@ export const RETENTION_REGISTRY: readonly RetentionRow[] = [
 		canonicalRoot: 'project-swarm',
 		writerModules: ['src/scope/scope-persistence.ts'],
 		writerCitations: [
-		'src/scope/scope-persistence.ts:1699 writeScopeToDisk (v1 projection) / :1775 writeScopeBindingToDisk (v2) / :2420 claimScopeBindingForChildDurably / :2669 replaceExistingScopeDeclaration / :2230 tombstoneScopeBinding / :2309 refreshScopeBindingLease / :866 transitionScopeBindingState / :989 importScopeBindingStateRows',
+		'src/scope/scope-persistence.ts:1699 writeScopeToDisk (v1 projection) / :1775 writeScopeBindingToDisk (v2) / :2473 claimScopeBindingForChildDurably / :2722 replaceExistingScopeDeclaration / :2230 tombstoneScopeBinding / :2309 refreshScopeBindingLease / :866 transitionScopeBindingState / :989 importScopeBindingStateRows',
 	],
 	readerCitations: [
-		'src/scope/scope-persistence.ts:3746 readScopeFromDisk — bounded 2 MiB O_NOFOLLOW v1 compatibility, sync',
+		'src/scope/scope-persistence.ts:3799 readScopeFromDisk — bounded 2 MiB O_NOFOLLOW v1 compatibility, sync',
 		'src/scope/scope-persistence.ts:1320 readAllAuthoritativeScopeBindings — bounded indexed SQLite scan, sync',
 		],
 		schemaVersion: 'v1 projection + v2 exact-generation bindings (v1 never authorizes: :916)',

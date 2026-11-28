@@ -68,6 +68,7 @@ import {
 } from '../pr-review/persistence.js';
 import { readVerdictSettlementReceipt } from '../pr-review/verdict-settlement.js';
 import { flushRouteRetirementObligation } from '../review/route-invalidation-registry.js';
+import { renewClaimedScopeBindingForDelegation } from '../scope/scope-persistence.js';
 import { telemetry } from '../telemetry.js';
 import { bunWrite } from '../utils/bun-compat.js';
 import {
@@ -9350,6 +9351,10 @@ export async function maintainBackgroundDelegations(
 		examinedReservations: 0,
 	};
 	const facts: DelegationMaintenanceFact[] = [];
+	// Phase B collects the reservation objects it renews (not just their ids)
+	// so Phase C can re-arm the dispatch's claimed scope binding outside the
+	// reservation store lock.
+	const renewedReservations: BackgroundCoderReservation[] = [];
 	const emitObservation = (
 		status: 'ok' | 'contention' | 'failure',
 		failureReason?: string,
@@ -9596,6 +9601,7 @@ export async function maintainBackgroundDelegations(
 							// Terminal-child states (completed / ingestion_error)
 							// never reach here: they prove release above instead.
 							mutated = true;
+							renewedReservations.push(reservation);
 							result.renewed.push({
 								reservationId: reservation.reservationId,
 								generation,
@@ -9728,6 +9734,70 @@ export async function maintainBackgroundDelegations(
 			'failure',
 			error instanceof Error ? error.message : String(error),
 		);
+	}
+
+	// Phase C — dispatch-liveness scope-binding renewal (field class
+	// 2.23 / 3.18, 2026-11-25/28). Every reservation Phase B just renewed
+	// carries proven durable owner activity, yet the claimed scope binding
+	// of that dispatch only re-arms on verified in-scope FILE mutations — a
+	// coder verification phase that legitimately performs none for longer
+	// than the binding TTL (strict serial test runs, replays, background
+	// shells) lets the binding lapse mid-round and burns the dispatch on
+	// SCOPE_BINDING_EXPIRED while the round is provably live. Re-arm the
+	// claimed binding for each renewed dispatch, outside every store lock.
+	// Best-effort by design: a skipped, refused, or failed renewal is
+	// recorded as a fact and never fails the maintenance point — the
+	// binding TTL plus the authorization gate's bounded idle-revival
+	// (#2271) remain the authority; this only keeps a live dispatch's
+	// binding from dying of old age.
+	for (const reservation of renewedReservations) {
+		const record =
+			reservation.correlationId !== null
+				? findByCorrelationId(directory, reservation.correlationId)
+				: null;
+		const childSessionId = record?.subagentSessionId ?? null;
+		if (
+			!reservation.planTaskId ||
+			!childSessionId ||
+			record?.planTaskId !== reservation.planTaskId
+		) {
+			facts.push({
+				at: now,
+				kind: 'scope-binding-renewal',
+				reservationId: reservation.reservationId,
+				correlationId: reservation.correlationId ?? undefined,
+				reason: !childSessionId
+					? 'skipped: no child session identity on the delegation record'
+					: 'skipped: reservation/delegation task identity mismatch',
+			});
+			continue;
+		}
+		let renewalReason: string;
+		try {
+			const renewal = await renewClaimedScopeBindingForDelegation({
+				directory,
+				childSessionId,
+				taskId: reservation.planTaskId,
+				dispatchCallId: reservation.callID,
+			});
+			renewalReason =
+				renewal === null
+					? 'no claimed binding for this dispatch'
+					: renewal.ok
+						? 'claimed binding lease re-armed'
+						: `renewal refused: ${renewal.code}`;
+		} catch (error) {
+			renewalReason = `renewal failed: ${
+				error instanceof Error ? error.message : String(error)
+			}`;
+		}
+		facts.push({
+			at: now,
+			kind: 'scope-binding-renewal',
+			reservationId: reservation.reservationId,
+			correlationId: reservation.correlationId ?? undefined,
+			reason: renewalReason,
+		});
 	}
 
 	// A terminal observer may have completed ingestion while legacy WAL transfer

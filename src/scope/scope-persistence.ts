@@ -2387,6 +2387,59 @@ export async function refreshScopeBindingLease(input: {
 	return persisted;
 }
 
+/**
+ * Dispatch-liveness renewal for a delegated coder round's claimed binding
+ * (field class 2.23 / 3.18, 2026-11-25/28): the binding TTL is a hard
+ * wall-clock budget that only verified in-scope file mutations re-arm
+ * (scope-lease-renewal), so a verification phase that legitimately performs
+ * no in-scope file writes for longer than the TTL — strict serial test
+ * runs, replays, background shells — lets the binding lapse MID-ROUND and
+ * burns the dispatch on SCOPE_BINDING_EXPIRED even though the delegation is
+ * provably live (its reservation lease is renewed on owner activity). The
+ * delegation maintenance pass calls this for every reservation it just
+ * renewed: while the dispatch is live, its claimed binding must not die of
+ * old age.
+ *
+ * Best-effort and guard-preserving: only an exact, live, UNEXPIRED claimed
+ * generation for this task/dispatch/child is re-armed — every
+ * refreshScopeBindingLease CAS and deny-ledger check applies unchanged.
+ * An already-expired generation is deliberately NOT revived here: the
+ * authorization gate's bounded idle-revival (#2271) owns that decision.
+ * Returns null when no claimed binding matches (nothing to renew — e.g. a
+ * declaration-scope round or a superseded dispatch whose claim never
+ * landed).
+ */
+export async function renewClaimedScopeBindingForDelegation(input: {
+	directory: string;
+	childSessionId: string;
+	taskId: string;
+	dispatchCallId: string;
+}): Promise<ScopePersistenceResult | null> {
+	const imported = ensureScopeBindingAuthorityImported(input.directory);
+	if (!imported.ok) return imported;
+	const all = readAllAuthoritativeScopeBindings(input.directory, {
+		enforceLiveCapacity: false,
+	});
+	if (!all.ok) return all;
+	const match = all.value.find(
+		(candidate) =>
+			candidate.taskId === input.taskId &&
+			candidate.ownerSessionId === input.childSessionId &&
+			candidate.dispatchCallId === input.dispatchCallId &&
+			candidate.lifecycleState === 'live' &&
+			candidate.activation === 'active',
+	);
+	if (!match) return null;
+	return refreshScopeBindingLease({
+		directory: input.directory,
+		bindingId: match.bindingId,
+		generationId: match.generationId,
+		expectedRevision: match.revision,
+		activeSessionId: input.childSessionId,
+		taskId: input.taskId,
+	});
+}
+
 interface ScopeClaimReceipt {
 	version: 1;
 	predecessorGenerationId: string;
