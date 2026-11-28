@@ -28,6 +28,7 @@ import { closeAllProjectDbs } from '../../../src/db/project-db';
 import { resetStartupLedgerCheck } from '../../../src/plan/manager';
 import { ensureAgentSession, resetSwarmState } from '../../../src/state';
 import { createSafeTestDir } from '../../helpers/safe-test-dir';
+import { freezeClock } from '../../helpers/test-clock';
 
 const PARENT = 'ses-reason-parent';
 const CORR = 'ses-reason-child';
@@ -35,14 +36,17 @@ const CORR = 'ses-reason-child';
 describe('retryable ingestion commits persist the failure reason', () => {
 	let directory = '';
 	let cleanup: () => void;
+	let restoreClock: () => void;
 
 	beforeEach(() => {
+		restoreClock = freezeClock({ fixedNow: Date.now() });
 		resetSwarmState();
 		resetStartupLedgerCheck();
 		({ dir: directory, cleanup } = createSafeTestDir('bg-ingest-reason-'));
 	});
 
 	afterEach(() => {
+		restoreClock();
 		resetSwarmState();
 		resetStartupLedgerCheck();
 		closeAllProjectDbs();
